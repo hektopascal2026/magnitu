@@ -31,6 +31,19 @@ echo ""
 # ── Check prerequisites ──
 echo "  [1/5] Checking prerequisites..."
 
+# On macOS, ensure Xcode Command Line Tools are installed (provides git + python3)
+if [[ "$OSTYPE" == darwin* ]]; then
+    if ! xcode-select -p &>/dev/null; then
+        echo ""
+        echo "  macOS needs Command Line Tools (provides Python & git)."
+        echo "  Installing now — a dialog may appear, click 'Install'."
+        echo ""
+        xcode-select --install 2>/dev/null
+        echo "  After installation finishes, run this command again."
+        exit 0
+    fi
+fi
+
 # Python
 if command -v python3 &>/dev/null; then
     PY=python3
