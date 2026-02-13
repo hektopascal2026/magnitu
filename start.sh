@@ -9,7 +9,7 @@ PORT=8000
 HOST="127.0.0.1"
 URL="http://$HOST:$PORT"
 
-clear
+clear 2>/dev/null || true
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "   Magnitu"

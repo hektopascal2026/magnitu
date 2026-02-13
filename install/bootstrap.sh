@@ -21,7 +21,7 @@ else
     INSTALL_DIR="$HOME/magnitu"
 fi
 
-clear
+clear 2>/dev/null || true
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "   Magnitu Installer"
