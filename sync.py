@@ -58,6 +58,53 @@ def push_recipe(recipe: dict) -> dict:
     return result
 
 
+def push_labels() -> dict:
+    """Push all local labels to Seismo so other instances can pull them."""
+    all_labels = db.get_all_labels_raw()
+    if not all_labels:
+        return {"success": True, "pushed": 0}
+
+    payload = {
+        "labels": [
+            {
+                "entry_type": lbl["entry_type"],
+                "entry_id": lbl["entry_id"],
+                "label": lbl["label"],
+                "labeled_at": lbl.get("updated_at") or lbl.get("created_at", ""),
+            }
+            for lbl in all_labels
+        ]
+    }
+
+    result = _request("POST", {"action": "magnitu_labels"}, json=payload).json()
+    db.log_sync("push", len(all_labels), "labels pushed")
+    return result
+
+
+def pull_labels() -> int:
+    """Pull labels from Seismo and merge into local database. Returns count imported."""
+    data = _request("GET", {"action": "magnitu_labels"}).json()
+    labels = data.get("labels", [])
+
+    imported = 0
+    for lbl in labels:
+        entry_type = lbl.get("entry_type", "")
+        entry_id = int(lbl.get("entry_id", 0))
+        label = lbl.get("label", "")
+        if not entry_type or not entry_id or not label:
+            continue
+
+        # Only import if we don't already have a label for this entry
+        existing = db.get_label(entry_type, entry_id)
+        if existing is None:
+            db.set_label(entry_type, entry_id, label)
+            imported += 1
+
+    if imported:
+        db.log_sync("pull", imported, "labels pulled from Seismo")
+    return imported
+
+
 def get_status() -> dict:
     """Check Seismo connectivity and status."""
     return _request("GET", {"action": "magnitu_status"}).json()

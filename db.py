@@ -199,6 +199,18 @@ def get_all_labels() -> List[dict]:
     return [dict(r) for r in rows]
 
 
+def get_all_labels_raw() -> List[dict]:
+    """Get all labels without joining entries (for syncing)."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT entry_type, entry_id, label, created_at, updated_at
+        FROM labels
+        ORDER BY updated_at DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_label_count() -> int:
     conn = get_db()
     count = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]

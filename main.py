@@ -137,6 +137,13 @@ async def set_label(
     if label not in valid_labels:
         raise HTTPException(400, f"Invalid label. Must be one of: {valid_labels}")
     db.set_label(entry_type, entry_id, label)
+
+    # Push label to Seismo in background (best-effort)
+    try:
+        sync.push_labels()
+    except Exception:
+        pass  # Don't fail the label action if push fails
+
     return {"success": True, "entry_type": entry_type, "entry_id": entry_id, "label": label}
 
 
@@ -154,10 +161,16 @@ async def remove_label(
 
 @app.post("/api/sync/pull")
 async def sync_pull():
-    """Pull entries from Seismo."""
+    """Pull entries and labels from Seismo."""
     try:
         count = sync.pull_entries()
-        return {"success": True, "entries_fetched": count}
+        # Also pull labels so new instances get existing training data
+        labels_imported = 0
+        try:
+            labels_imported = sync.pull_labels()
+        except Exception:
+            pass  # Seismo might not have the labels endpoint yet
+        return {"success": True, "entries_fetched": count, "labels_imported": labels_imported}
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -192,6 +205,12 @@ async def sync_push():
     except Exception as e:
         raise HTTPException(500, f"Failed to push scores: {e}")
 
+    # Also push labels to keep Seismo in sync
+    try:
+        sync.push_labels()
+    except Exception:
+        pass
+
     # Distill and push recipe
     recipe = distiller.distill_recipe()
     recipe_result = {}
@@ -207,6 +226,22 @@ async def sync_push():
         "score_result": score_result,
         "recipe_result": recipe_result,
     }
+
+
+@app.post("/api/sync/labels")
+async def sync_labels():
+    """Push local labels to Seismo and pull any new labels back."""
+    pushed = {}
+    pulled = 0
+    try:
+        pushed = sync.push_labels()
+    except Exception as e:
+        raise HTTPException(500, f"Failed to push labels: {e}")
+    try:
+        pulled = sync.pull_labels()
+    except Exception:
+        pass
+    return {"success": True, "pushed": pushed, "labels_imported": pulled}
 
 
 @app.get("/api/sync/test")
