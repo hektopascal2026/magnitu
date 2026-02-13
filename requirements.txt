@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+scikit-learn
+joblib
+pandas
+httpx
+jinja2
+python-multipart
+aiofiles

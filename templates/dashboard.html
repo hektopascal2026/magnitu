@@ -1,0 +1,148 @@
+{% extends "layout.html" %}
+{% block title %}Dashboard — Magnitu{% endblock %}
+
+{% block content %}
+<!-- Model Status -->
+<div class="dashboard-section">
+    <h2>Model Status</h2>
+    {% if active_model %}
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value">v{{ active_model.version }}</div>
+                <div class="stat-label">Model Version</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ (active_model.accuracy * 100) | round(1) }}%</div>
+                <div class="stat-label">Accuracy</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ (active_model.f1_score * 100) | round(1) }}%</div>
+                <div class="stat-label">F1 Score</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ active_model.label_count }}</div>
+                <div class="stat-label">Labels Used</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ active_model.feature_count }}</div>
+                <div class="stat-label">Features</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ active_model.trained_at[:10] if active_model.trained_at else 'N/A' }}</div>
+                <div class="stat-label">Trained</div>
+            </div>
+        </div>
+    {% else %}
+        <div class="empty-state">
+            <p>No model trained yet. Label at least {{ config.min_labels_to_train or 20 }} entries, then train.</p>
+        </div>
+    {% endif %}
+</div>
+
+<!-- Label Distribution -->
+<div class="dashboard-section">
+    <h2>Label Distribution</h2>
+    {% if label_distribution %}
+        <div class="label-dist-chart">
+            {% set total = label_distribution.values() | sum %}
+            {% for label, count in label_distribution.items() %}
+                <div class="dist-row">
+                    <span class="dist-label label-{{ label }}">{{ label | replace('_', ' ') }}</span>
+                    <div class="dist-bar-container">
+                        <div class="dist-bar dist-bar-{{ label }}" style="width: {{ (count / total * 100) | round(1) }}%"></div>
+                    </div>
+                    <span class="dist-count">{{ count }} ({{ (count / total * 100) | round(0) }}%)</span>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state"><p>No labels yet.</p></div>
+    {% endif %}
+</div>
+
+<!-- Top Keywords per Class -->
+<div class="dashboard-section">
+    <h2>Top Keywords</h2>
+    {% if keywords %}
+        <div class="keywords-grid">
+            {% for cls, pairs in keywords.items() %}
+                <div class="keyword-class">
+                    <h3 class="label-{{ cls }}">{{ cls | replace('_', ' ') }}</h3>
+                    <table class="keyword-table">
+                        <thead><tr><th>Keyword</th><th>Weight</th></tr></thead>
+                        <tbody>
+                            {% for keyword, weight in pairs[:20] %}
+                                <tr>
+                                    <td class="kw-name">{{ keyword }}</td>
+                                    <td class="kw-weight {% if weight > 0 %}kw-positive{% else %}kw-negative{% endif %}">
+                                        {{ "%.3f" | format(weight) }}
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            {% endfor %}
+        </div>
+    {% else %}
+        <div class="empty-state"><p>Train a model to see learned keywords.</p></div>
+    {% endif %}
+</div>
+
+<!-- Training History -->
+<div class="dashboard-section">
+    <h2>Training History</h2>
+    {% if models %}
+        <table class="history-table">
+            <thead>
+                <tr>
+                    <th>Version</th>
+                    <th>Accuracy</th>
+                    <th>F1</th>
+                    <th>Labels</th>
+                    <th>Features</th>
+                    <th>Trained</th>
+                    <th>Active</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for m in models %}
+                    <tr class="{% if m.is_active %}active-model{% endif %}">
+                        <td>v{{ m.version }}</td>
+                        <td>{{ (m.accuracy * 100) | round(1) }}%</td>
+                        <td>{{ (m.f1_score * 100) | round(1) }}%</td>
+                        <td>{{ m.label_count }}</td>
+                        <td>{{ m.feature_count }}</td>
+                        <td>{{ m.trained_at[:16] if m.trained_at else '' }}</td>
+                        <td>{% if m.is_active %}Active{% endif %}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-state"><p>No models trained yet.</p></div>
+    {% endif %}
+</div>
+
+<!-- Sync Log -->
+<div class="dashboard-section">
+    <h2>Sync Log</h2>
+    {% if syncs %}
+        <table class="history-table">
+            <thead><tr><th>Direction</th><th>Items</th><th>Details</th><th>Time</th></tr></thead>
+            <tbody>
+                {% for s in syncs %}
+                    <tr>
+                        <td><span class="sync-dir sync-{{ s.direction }}">{{ s.direction }}</span></td>
+                        <td>{{ s.items_count }}</td>
+                        <td>{{ s.details }}</td>
+                        <td>{{ s.synced_at[:16] if s.synced_at else '' }}</td>
+                    </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <div class="empty-state"><p>No syncs yet.</p></div>
+    {% endif %}
+</div>
+{% endblock %}

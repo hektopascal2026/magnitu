@@ -1,0 +1,145 @@
+{% extends "layout.html" %}
+{% block title %}Settings — Magnitu{% endblock %}
+
+{% block content %}
+<div class="settings-page">
+    <!-- Seismo Connection -->
+    <div class="dashboard-section">
+        <h2>Seismo Connection</h2>
+        <div class="settings-form" id="connectionForm">
+            <div class="form-group">
+                <label>Seismo URL</label>
+                <input type="url" id="seismoUrl" value="{{ config.seismo_url }}" 
+                       placeholder="https://your-domain.ch/seismo_0.3/index.php">
+                <div class="form-help">The full URL to seismo's index.php</div>
+            </div>
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="text" id="apiKey" value="{{ config.api_key }}" 
+                       placeholder="Paste your Seismo API key here"
+                       style="font-family: monospace;">
+                <div class="form-help">Find this in Seismo Settings > Magnitu section</div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" id="saveConnectionBtn">Save Connection</button>
+                <button class="btn" id="testConnectionBtn">Test Connection</button>
+                <span id="connectionStatus"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Training Settings -->
+    <div class="dashboard-section">
+        <h2>Training Settings</h2>
+        <div class="settings-form" id="trainingForm">
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label>Minimum Labels to Train</label>
+                    <input type="number" id="minLabels" value="{{ config.min_labels_to_train or 20 }}" min="5" max="500">
+                    <div class="form-help">How many labeled entries before the first model can be trained</div>
+                </div>
+                <div class="form-group">
+                    <label>Recipe Top Keywords</label>
+                    <input type="number" id="recipeKeywords" value="{{ config.recipe_top_keywords or 200 }}" min="50" max="1000">
+                    <div class="form-help">How many keywords to include in the recipe exported to Seismo</div>
+                </div>
+                <div class="form-group">
+                    <label>Alert Threshold (0.0 - 1.0)</label>
+                    <input type="number" id="alertThreshold" value="{{ config.alert_threshold or 0.75 }}" min="0" max="1" step="0.05">
+                    <div class="form-help">Score above which entries are highlighted as alerts in Seismo</div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" id="saveTrainingBtn">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Keyboard Shortcuts Reference -->
+    <div class="dashboard-section">
+        <h2>Keyboard Shortcuts</h2>
+        <div class="shortcuts-grid">
+            <div class="shortcut"><kbd>1</kbd> Investigation Lead</div>
+            <div class="shortcut"><kbd>2</kbd> Important</div>
+            <div class="shortcut"><kbd>3</kbd> Background</div>
+            <div class="shortcut"><kbd>4</kbd> Noise</div>
+            <div class="shortcut"><kbd>j</kbd> / <kbd>↓</kbd> Next entry</div>
+            <div class="shortcut"><kbd>k</kbd> / <kbd>↑</kbd> Previous entry</div>
+            <div class="shortcut"><kbd>u</kbd> Undo label</div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    // Save connection
+    document.getElementById('saveConnectionBtn').addEventListener('click', function() {
+        var data = {
+            seismo_url: document.getElementById('seismoUrl').value.trim(),
+            api_key: document.getElementById('apiKey').value.trim(),
+        };
+        fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) flash('Connection settings saved.', 'success');
+            else flash('Failed to save.', 'error');
+        })
+        .catch(function(err) { flash('Error: ' + err.message, 'error'); });
+    });
+
+    // Test connection
+    document.getElementById('testConnectionBtn').addEventListener('click', function() {
+        var status = document.getElementById('connectionStatus');
+        status.textContent = 'Testing...';
+        status.className = '';
+        
+        // Save first, then test
+        var data = {
+            seismo_url: document.getElementById('seismoUrl').value.trim(),
+            api_key: document.getElementById('apiKey').value.trim(),
+        };
+        fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        })
+        .then(function() { return fetch('/api/sync/test'); })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            status.textContent = d.message;
+            status.className = d.success ? 'status-ok' : 'status-error';
+        })
+        .catch(function(err) {
+            status.textContent = 'Error: ' + err.message;
+            status.className = 'status-error';
+        });
+    });
+
+    // Save training settings
+    document.getElementById('saveTrainingBtn').addEventListener('click', function() {
+        var data = {
+            min_labels_to_train: parseInt(document.getElementById('minLabels').value),
+            recipe_top_keywords: parseInt(document.getElementById('recipeKeywords').value),
+            alert_threshold: parseFloat(document.getElementById('alertThreshold').value),
+        };
+        fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) flash('Training settings saved.', 'success');
+            else flash('Failed to save.', 'error');
+        })
+        .catch(function(err) { flash('Error: ' + err.message, 'error'); });
+    });
+})();
+</script>
+{% endblock %}

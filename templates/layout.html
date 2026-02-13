@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Magnitu{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Top Bar -->
+        <div class="top-bar">
+            <div class="top-bar-left">
+                <span class="top-bar-title">
+                    <a href="/">Magnitu</a>
+                </span>
+                <span class="top-bar-subtitle">
+                    {% if active_model %}
+                        v{{ active_model.version }} &middot; {{ label_count }} labels &middot; {{ entry_count }} entries
+                    {% else %}
+                        {{ label_count }} labels &middot; {{ entry_count }} entries
+                    {% endif %}
+                </span>
+            </div>
+            <nav class="top-bar-nav">
+                <a href="/" class="nav-link {% if request.url.path == '/' %}active{% endif %}">Label</a>
+                <a href="/dashboard" class="nav-link {% if request.url.path == '/dashboard' %}active{% endif %}">Dashboard</a>
+                <a href="/settings" class="nav-link {% if request.url.path == '/settings' %}active{% endif %}">Settings</a>
+            </nav>
+        </div>
+
+        <!-- Flash Messages -->
+        <div id="flash-messages"></div>
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+    // Flash message helper
+    function flash(msg, type) {
+        var el = document.getElementById('flash-messages');
+        var div = document.createElement('div');
+        div.className = 'message message-' + (type || 'info');
+        div.textContent = msg;
+        el.appendChild(div);
+        setTimeout(function() { div.remove(); }, 5000);
+    }
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

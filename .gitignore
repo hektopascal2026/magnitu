@@ -1,0 +1,7 @@
+magnitu.db
+*.pyc
+__pycache__/
+models/*.joblib
+models/*.json
+magnitu_config.json
+.venv/
