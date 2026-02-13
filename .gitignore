@@ -6,3 +6,5 @@ magnitu_config.json
 __pycache__/
 models/*.joblib
 .venv/
+.DS_Store
+install.zip

@@ -1,28 +1,31 @@
-Magnitu – Setup Instructions
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Magnitu – Installation
+━━━━━━━━━━━━━━━━━━━━━━
 
 Magnitu is a machine-learning relevance engine for Seismo.
-It learns which entries matter to you and highlights investigation leads.
+It learns which news entries matter to you and highlights investigation leads.
 
 Requirements:
-  • macOS or Linux
-  • Python 3.9 or newer (https://www.python.org/downloads/)
+  • macOS (or Linux)
+  • Python 3.9+ (pre-installed on macOS)
 
-Setup (one time):
-  1. Open Terminal
-  2. Navigate to this folder:  cd path/to/magnitu
-  3. Run:  bash install/setup.sh
-  4. Enter your API key when prompted
-     (find it in Seismo → Settings → Magnitu section)
+Install (one-liner):
+  Open Terminal and paste:
 
-Daily use:
-  • Double-click "Magnitu.command" on your Desktop
-  • Or run:  cd path/to/magnitu && source .venv/bin/activate && python -m uvicorn main:app --port 8000
-  • Open http://localhost:8000 in your browser
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/hektopascal2026/magnitu/main/install/bootstrap.sh)"
 
-What it does:
-  • Pulls entries from your Seismo instance
-  • You label entries as: investigation_lead, important, background, noise
-  • After ~20 labels, train a model
-  • The model scores all entries and pushes results back to Seismo
-  • Over time, it learns what matters to you
+  It will:
+  1. Download Magnitu to ~/magnitu
+  2. Set up the Python environment
+  3. Ask for your API key
+  4. Test the connection to Seismo
+
+Start Magnitu:
+  ~/magnitu/start.sh
+
+  It opens automatically in your browser at http://localhost:8000
+
+Update:
+  cd ~/magnitu && git pull
+
+Uninstall:
+  rm -rf ~/magnitu
