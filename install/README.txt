@@ -8,10 +8,9 @@ Requirements:
   • macOS (or Linux)
   • Python 3.9+ (pre-installed on macOS)
 
-Install (one-liner):
-  Open Terminal and paste:
+Install (paste into Terminal):
 
-  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/hektopascal2026/magnitu/main/install/bootstrap.sh)"
+  git clone https://github.com/hektopascal2026/magnitu.git ~/magnitu && bash ~/magnitu/install/bootstrap.sh
 
   It will:
   1. Download Magnitu to ~/magnitu
@@ -20,12 +19,15 @@ Install (one-liner):
   4. Test the connection to Seismo
 
 Start Magnitu:
+
   ~/magnitu/start.sh
 
-  It opens automatically in your browser at http://localhost:8000
+  Opens automatically in your browser at http://127.0.0.1:8000
 
 Update:
+
   cd ~/magnitu && git pull
 
 Uninstall:
+
   rm -rf ~/magnitu

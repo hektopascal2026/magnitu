@@ -1,14 +1,25 @@
 #!/bin/bash
 # ─────────────────────────────────────────────
 #  Magnitu — Remote installer
-#  Usage:  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/hektopascal2026/magnitu/main/install/bootstrap.sh)"
+#
+#  For PUBLIC repos:
+#    /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/hektopascal2026/magnitu/main/install/bootstrap.sh)"
+#
+#  For PRIVATE repos (one-liner):
+#    git clone https://github.com/hektopascal2026/magnitu.git ~/magnitu && bash ~/magnitu/install/bootstrap.sh
 # ─────────────────────────────────────────────
 
 set -e
 
-REPO="https://github.com/hektopascal2026/magnitu.git"
-INSTALL_DIR="$HOME/magnitu"
 DEFAULT_URL="https://www.hektopascal.org/seismo-staging/index.php"
+
+# Determine install dir: if we're already inside the repo, use that
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)"
+if [ -f "$SCRIPT_DIR/../main.py" ]; then
+    INSTALL_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+else
+    INSTALL_DIR="$HOME/magnitu"
+fi
 
 clear
 echo ""
@@ -42,26 +53,30 @@ if ! command -v git &>/dev/null; then
     echo ""
     exit 1
 fi
-echo "         git: $(git --version)"
+echo "         git: $(git --version 2>&1 | head -1)"
 echo ""
 
 # ── Clone or update ──
 echo "  [2/5] Getting Magnitu..."
-if [ -d "$INSTALL_DIR/.git" ]; then
+if [ -f "$INSTALL_DIR/main.py" ]; then
     echo "         Found existing install at $INSTALL_DIR"
-    cd "$INSTALL_DIR"
-    git pull -q origin main 2>/dev/null || true
-    echo "         Updated."
+    if [ -d "$INSTALL_DIR/.git" ]; then
+        cd "$INSTALL_DIR"
+        git pull -q origin main 2>/dev/null || true
+        echo "         Updated."
+    fi
 else
+    REPO="https://github.com/hektopascal2026/magnitu.git"
     if [ -d "$INSTALL_DIR" ]; then
-        echo "         $INSTALL_DIR exists but is not a git repo."
+        echo "         $INSTALL_DIR exists but is not a Magnitu install."
         echo "         Please remove it first: rm -rf $INSTALL_DIR"
         exit 1
     fi
+    echo "         Cloning repository..."
     git clone -q "$REPO" "$INSTALL_DIR"
-    cd "$INSTALL_DIR"
     echo "         Cloned to $INSTALL_DIR"
 fi
+cd "$INSTALL_DIR"
 echo ""
 
 # ── Python environment ──
@@ -80,6 +95,7 @@ echo "  [4/5] Configuration"
 echo ""
 
 CONFIG_FILE="$INSTALL_DIR/magnitu_config.json"
+SKIP_CONFIG=""
 
 # Check if already configured
 if [ -f "$CONFIG_FILE" ]; then
@@ -87,13 +103,13 @@ if [ -f "$CONFIG_FILE" ]; then
     read -r -p "         Reconfigure? (y/N): " RECONFIG
     if [ "$RECONFIG" != "y" ] && [ "$RECONFIG" != "Y" ]; then
         echo "         Keeping existing config."
-        echo ""
         SKIP_CONFIG=1
     fi
 fi
 
 if [ -z "$SKIP_CONFIG" ]; then
     # Seismo URL
+    echo ""
     echo "         Seismo URL (press Enter for default):"
     echo "         Default: $DEFAULT_URL"
     read -r -p "         URL: " SEISMO_URL
@@ -127,6 +143,7 @@ fi
 # Reset database if it exists (from a previous install or copy)
 DB_FILE="$INSTALL_DIR/magnitu.db"
 if [ -f "$DB_FILE" ]; then
+    echo ""
     read -r -p "         Reset database for fresh start? (y/N): " RESET_DB
     if [ "$RESET_DB" = "y" ] || [ "$RESET_DB" = "Y" ]; then
         rm -f "$DB_FILE" "$DB_FILE-shm" "$DB_FILE-wal"
@@ -156,11 +173,7 @@ echo "  ━━━━━━━━━━━━━━━━━━━━━━━━
 echo ""
 echo "  To start Magnitu, paste this into Terminal:"
 echo ""
-echo "    ~/magnitu/start.sh"
+echo "    $INSTALL_DIR/start.sh"
 echo ""
 echo "  It will open automatically in your browser."
-echo ""
-echo "  To update later:"
-echo ""
-echo "    cd ~/magnitu && git pull"
 echo ""
