@@ -42,9 +42,9 @@ else
     echo "  Virtual environment exists."
 fi
 
-echo "  Installing dependencies..."
-source "$MAGNITU_DIR/.venv/bin/activate"
-pip install -q -r "$MAGNITU_DIR/requirements.txt"
+echo "  Installing dependencies (this may take a minute)..."
+"$MAGNITU_DIR/.venv/bin/python" -m ensurepip --upgrade -q 2>/dev/null || true
+"$MAGNITU_DIR/.venv/bin/python" -m pip install -q -r "$MAGNITU_DIR/requirements.txt"
 echo "  Done."
 echo ""
 
@@ -104,8 +104,7 @@ echo ""
 
 # ── Step 5: Test connection ──
 echo "  Testing connection to Seismo..."
-source "$MAGNITU_DIR/.venv/bin/activate"
-TEST_RESULT=$($PY -c "
+TEST_RESULT=$("$MAGNITU_DIR/.venv/bin/python" -c "
 import sys
 sys.path.insert(0, '$MAGNITU_DIR')
 import sync
@@ -143,12 +142,15 @@ if lsof -ti:\$PORT > /dev/null 2>&1; then
 fi
 
 cd "\$DIR" || { echo "  Error: \$DIR not found"; exit 1; }
-source .venv/bin/activate 2>/dev/null || { echo "  Error: run setup.sh first"; exit 1; }
+if [ ! -f .venv/bin/python ]; then
+    echo "  Error: run setup.sh first"
+    exit 1
+fi
 
 echo "  Starting on \$URL ..."
 echo ""
 (sleep 2 && open "\$URL") &
-python -m uvicorn main:app --port \$PORT
+.venv/bin/python -m uvicorn main:app --port \$PORT
 echo ""
 echo "  Magnitu stopped."
 LAUNCH
