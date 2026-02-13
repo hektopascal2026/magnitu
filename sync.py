@@ -6,15 +6,15 @@ from config import get_config
 import db
 
 
-def _client() -> httpx.Client:
-    """Create an HTTP client with auth headers and query parameter fallback."""
+def _request(method: str, params: dict, **kwargs) -> httpx.Response:
+    """Make a request to Seismo with auth. Avoids base_url trailing-slash issues."""
     cfg = get_config()
-    return httpx.Client(
-        base_url=cfg["seismo_url"],
-        headers={"Authorization": f"Bearer {cfg['api_key']}"},
-        params={"api_key": cfg["api_key"]},
-        timeout=30.0,
-    )
+    url = cfg["seismo_url"]
+    params["api_key"] = cfg["api_key"]
+    with httpx.Client(timeout=30.0) as client:
+        resp = client.request(method, url, params=params, **kwargs)
+        resp.raise_for_status()
+        return resp
 
 
 def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -> int:
@@ -26,10 +26,7 @@ def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -
     if since:
         params["since"] = since
 
-    with _client() as client:
-        resp = client.get("", params=params)
-        resp.raise_for_status()
-        data = resp.json()
+    data = _request("GET", params).json()
 
     entries = data.get("entries", [])
     if entries:
@@ -49,40 +46,21 @@ def push_scores(scores: list[dict], model_version: int) -> dict:
         "model_version": model_version,
     }
 
-    with _client() as client:
-        resp = client.post(
-            "",
-            params={"action": "magnitu_scores"},
-            json=payload,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-
+    result = _request("POST", {"action": "magnitu_scores"}, json=payload).json()
     db.log_sync("push", len(scores), f"scores pushed, model v{model_version}")
     return result
 
 
 def push_recipe(recipe: dict) -> dict:
     """Push a scoring recipe to Seismo."""
-    with _client() as client:
-        resp = client.post(
-            "",
-            params={"action": "magnitu_recipe"},
-            json=recipe,
-        )
-        resp.raise_for_status()
-        result = resp.json()
-
+    result = _request("POST", {"action": "magnitu_recipe"}, json=recipe).json()
     db.log_sync("push", 1, f"recipe v{recipe.get('version', '?')} pushed")
     return result
 
 
 def get_status() -> dict:
     """Check Seismo connectivity and status."""
-    with _client() as client:
-        resp = client.get("", params={"action": "magnitu_status"})
-        resp.raise_for_status()
-        return resp.json()
+    return _request("GET", {"action": "magnitu_status"}).json()
 
 
 def test_connection() -> tuple[bool, str]:

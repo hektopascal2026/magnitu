@@ -151,8 +151,8 @@ def train() -> dict:
     tfidf = pipeline.named_steps["features"].transformers_[0][1]
     feature_count = len(tfidf.vocabulary_) if hasattr(tfidf, "vocabulary_") else 0
 
-    # Label distribution
-    label_dist = dict(pd.Series(labels).value_counts())
+    # Label distribution (convert numpy.int64 -> int for JSON serialization)
+    label_dist = {k: int(v) for k, v in pd.Series(labels).value_counts().items()}
 
     # Save model record
     db.save_model_record(
@@ -168,6 +168,8 @@ def train() -> dict:
     )
 
     report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
+    # Convert numpy floats in report to native Python types for JSON serialization
+    report = json.loads(json.dumps(report, default=float))
 
     return {
         "success": True,
@@ -178,7 +180,7 @@ def train() -> dict:
         "recall": round(rec, 4),
         "label_count": len(labeled),
         "label_distribution": label_dist,
-        "feature_count": feature_count,
+        "feature_count": int(feature_count),
         "model_path": model_path,
         "split_note": split_note,
         "class_report": report,
