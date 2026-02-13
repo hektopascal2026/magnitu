@@ -1,0 +1,8 @@
+{
+  "seismo_url": "https://www.hektopascal.org/seismo-staging/index.php",
+  "api_key": "c407dc4435d6ec145aba689724d4ac53",
+  "min_labels_to_train": 20,
+  "recipe_top_keywords": 200,
+  "auto_train_after_n_labels": 10,
+  "alert_threshold": 0.75
+}
