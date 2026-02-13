@@ -6,7 +6,8 @@
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 PORT=8000
-URL="http://localhost:$PORT"
+HOST="127.0.0.1"
+URL="http://$HOST:$PORT"
 
 clear
 echo ""
@@ -47,11 +48,19 @@ echo "  Starting on $URL ..."
 echo "  Press Ctrl+C to stop."
 echo ""
 
-# Open browser after short delay
-(sleep 2 && open "$URL" 2>/dev/null) &
+# Wait for server to be ready, then open browser (background)
+(
+    for i in $(seq 1 30); do
+        sleep 1
+        if curl -s -o /dev/null -w '' "http://$HOST:$PORT" 2>/dev/null; then
+            open "http://$HOST:$PORT" 2>/dev/null
+            break
+        fi
+    done
+) &
 
-# Run server
-"$DIR/.venv/bin/python" -m uvicorn main:app --port $PORT
+# Run server (foreground — Ctrl+C stops it)
+"$DIR/.venv/bin/python" -m uvicorn main:app --host "$HOST" --port $PORT
 
 echo ""
 echo "  Magnitu stopped."
