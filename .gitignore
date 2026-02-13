@@ -1,5 +1,7 @@
+magnitu.db
 magnitu.db-shm
 magnitu.db-wal
+magnitu_config.json
 *.pyc
 __pycache__/
 models/*.joblib
