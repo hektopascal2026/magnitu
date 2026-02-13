@@ -76,6 +76,46 @@ async def dashboard_page(request: Request):
     return templates.TemplateResponse("dashboard.html", ctx)
 
 
+@app.get("/top", response_class=HTMLResponse)
+async def top_page(request: Request):
+    """Top 30 highest-scored entries — validates model accuracy."""
+    ctx = _base_context(request)
+    
+    # Score all local entries with the active model
+    all_entries = db.get_all_entries()
+    scored = pipeline.score_entries(all_entries)
+    
+    # Sort by relevance score descending, take top 30
+    scored.sort(key=lambda s: s["relevance_score"], reverse=True)
+    top_scored = scored[:30]
+    
+    # Enrich with entry data and user labels
+    top_entries = []
+    for s in top_scored:
+        # Find the full entry
+        entry = next((e for e in all_entries 
+                       if e["entry_type"] == s["entry_type"] and e["entry_id"] == s["entry_id"]), None)
+        if not entry:
+            continue
+        user_label = db.get_label(s["entry_type"], s["entry_id"])
+        top_entries.append({
+            "entry": entry,
+            "score": s,
+            "user_label": user_label,
+            "match": user_label == s["predicted_label"] if user_label else None,
+        })
+    
+    # Accuracy on labeled subset
+    labeled_in_top = [e for e in top_entries if e["user_label"] is not None]
+    correct = sum(1 for e in labeled_in_top if e["match"])
+    ctx["top_entries"] = top_entries
+    ctx["labeled_count"] = len(labeled_in_top)
+    ctx["correct_count"] = correct
+    ctx["accuracy"] = round(correct / len(labeled_in_top) * 100, 1) if labeled_in_top else None
+    
+    return templates.TemplateResponse("top.html", ctx)
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request):
     """Settings: seismo connection, thresholds."""

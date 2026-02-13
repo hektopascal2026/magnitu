@@ -1,0 +1,97 @@
+{% extends "layout.html" %}
+{% block title %}Top 30 — Magnitu{% endblock %}
+
+{% block content %}
+<div class="dashboard-section">
+    <h2>Top 30 Highest-Scored Entries</h2>
+    <p class="section-desc">These are the entries the model considers most relevant across all time. Compare the model's prediction against your labels to validate accuracy.</p>
+
+    {% if not active_model %}
+        <div class="empty-state"><p>No model trained yet. Train a model first to see scores.</p></div>
+    {% elif not top_entries %}
+        <div class="empty-state"><p>No entries scored. Pull entries from Seismo first.</p></div>
+    {% else %}
+        <!-- Accuracy Summary -->
+        <div class="top-accuracy-summary">
+            {% if accuracy is not none %}
+                <div class="stat-card">
+                    <div class="stat-value">{{ accuracy }}%</div>
+                    <div class="stat-label">Accuracy ({{ correct_count }}/{{ labeled_count }})</div>
+                </div>
+            {% endif %}
+            <div class="stat-card">
+                <div class="stat-value">{{ top_entries | length }}</div>
+                <div class="stat-label">Entries shown</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value">{{ labeled_count }}</div>
+                <div class="stat-label">Have your label</div>
+            </div>
+        </div>
+
+        <!-- Entries -->
+        <div class="entries-section">
+            {% for item in top_entries %}
+                {% set e = item.entry %}
+                {% set s = item.score %}
+                <div class="entry-card {% if item.user_label %}labeled labeled-{{ item.user_label }}{% endif %} {% if item.match == false %}top-mismatch{% endif %}"
+                     style="opacity: 1;">
+                    <div class="entry-header">
+                        <span class="entry-source-tag source-{{ e.source_type }}">{{ e.source_type }}</span>
+                        {% if e.source_category %}
+                            <span class="entry-category">{{ e.source_category }}</span>
+                        {% endif %}
+                        <span class="top-rank">#{{ loop.index }}</span>
+                        <span class="top-score-pill top-badge-{{ s.predicted_label }}">
+                            {{ (s.relevance_score * 100) | round(0) }} · {{ s.predicted_label | replace('_', ' ') }}
+                        </span>
+                        {% if e.published_date %}
+                            <span class="entry-date">{{ e.published_date[:10] }}</span>
+                        {% endif %}
+                    </div>
+
+                    <h3 class="entry-title">
+                        {% if e.link %}
+                            <a href="{{ e.link }}" target="_blank" rel="noopener">{{ e.title }}</a>
+                        {% else %}
+                            {{ e.title }}
+                        {% endif %}
+                    </h3>
+
+                    {% if e.description %}
+                        <div class="entry-content">{{ e.description[:300] }}{% if e.description|length > 300 %}...{% endif %}</div>
+                    {% endif %}
+
+                    <div class="top-entry-meta">
+                        {% if e.source_name %}
+                            <span class="entry-source">{{ e.source_name }}</span>
+                        {% endif %}
+                        <div class="top-validation">
+                            {% if item.user_label %}
+                                <span class="entry-current-label label-{{ item.user_label }}">
+                                    {{ item.user_label | replace('_', ' ') }}
+                                </span>
+                                {% if item.match %}
+                                    <span class="top-verdict-badge top-correct-bg">match</span>
+                                {% else %}
+                                    <span class="top-verdict-badge top-wrong-bg">mismatch</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="top-no-label">not labeled</span>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {% if s.probabilities %}
+                        <div class="top-probabilities">
+                            {% for cls, prob in s.probabilities.items() %}
+                                <span class="top-prob">{{ cls | replace('_', ' ') }}: {{ (prob * 100) | round(0) }}%</span>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+            {% endfor %}
+        </div>
+    {% endif %}
+</div>
+{% endblock %}
