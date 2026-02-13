@@ -7,11 +7,12 @@ import db
 
 
 def _client() -> httpx.Client:
-    """Create an HTTP client with auth headers."""
+    """Create an HTTP client with auth headers and query parameter fallback."""
     cfg = get_config()
     return httpx.Client(
         base_url=cfg["seismo_url"],
         headers={"Authorization": f"Bearer {cfg['api_key']}"},
+        params={"api_key": cfg["api_key"]},
         timeout=30.0,
     )
 
