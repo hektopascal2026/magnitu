@@ -31,7 +31,7 @@ body {
     align-items: center;
     gap: 10px;
     padding: 10px 0;
-    border-bottom: 2px solid #000000;
+    border-bottom: 2px solid #FF6B6B;
     margin-bottom: 16px;
 }
 
@@ -83,12 +83,12 @@ body {
 }
 
 .nav-link:hover {
-    box-shadow: 2px 2px 0px #000000;
+    box-shadow: 2px 2px 0px #FF6B6B;
 }
 
 .nav-link.active {
-    color: #ffffff;
-    background: #000000;
+    color: #000000;
+    background: #FF6B6B;
 }
 
 /* ═══ Buttons ═══ */
@@ -117,13 +117,13 @@ body {
 }
 
 .btn-primary {
-    background: #000000;
-    border-color: #000000;
-    color: #ffffff;
+    background: #FF6B6B;
+    border-color: #FF6B6B;
+    color: #000000;
 }
 
 .btn-primary:hover {
-    box-shadow: 2px 2px 0px #444444;
+    box-shadow: 2px 2px 0px #FF6B6B;
 }
 
 /* ═══ Messages ═══ */
@@ -171,7 +171,7 @@ body {
 
 .progress-fill {
     height: 100%;
-    background: #000000;
+    background: #FF6B6B;
     transition: width 0.3s ease;
 }
 
