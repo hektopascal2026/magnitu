@@ -44,6 +44,22 @@ if [ ! -f magnitu_config.json ]; then
     exit $?
 fi
 
+# ── Auto-update ──
+if [ -d "$DIR/.git" ]; then
+    echo "  Checking for updates..."
+    BEFORE=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+    git -C "$DIR" pull -q origin main 2>/dev/null || true
+    AFTER=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+    if [ "$BEFORE" != "$AFTER" ]; then
+        echo "  Updated to latest version."
+        # Re-install dependencies in case requirements changed
+        "$DIR/.venv/bin/python" -m pip install -q -r "$DIR/requirements.txt" 2>/dev/null || true
+    else
+        echo "  Already up to date."
+    fi
+    echo ""
+fi
+
 echo "  Starting on $URL ..."
 echo "  Press Ctrl+C to stop."
 echo ""
