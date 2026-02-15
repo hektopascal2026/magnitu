@@ -133,6 +133,60 @@
     </div>
 </div>
 
+<!-- Model Profiles -->
+<div class="dashboard-section">
+    <h2>Model Profiles</h2>
+    <p class="section-desc">Every Magnitu instance runs a named model profile. Models are portable — you can export, share, and import them.</p>
+
+    <div class="about-section">
+        <h3>The .magnitu File</h3>
+        <p>A model is packaged as a <code>.magnitu</code> file — a zip archive containing everything needed to continue training:</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">manifest.json</span>
+                <span class="about-detail-value">Model name, UUID, description, version chain, metrics</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">model.joblib</span>
+                <span class="about-detail-value">Trained sklearn pipeline (works immediately after import)</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">recipe.json</span>
+                <span class="about-detail-value">Distilled keyword recipe for Seismo's PHP scorer</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">labels.json</span>
+                <span class="about-detail-value">All labeled entries with text — the training data</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="about-section">
+        <h3>Sharing and Collaboration</h3>
+        <p>Export your model from the <strong>Model</strong> page and send the <code>.magnitu</code> file to a colleague. They import it, get all your labels and the trained model, then continue labeling and retraining. Each training creates a new version in the chain.</p>
+    </div>
+
+    <div class="about-section">
+        <h3>Version Protection</h3>
+        <p>When importing a model file, Magnitu protects against regression:</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">Labels</span>
+                <span class="about-detail-value">Always merged — newer timestamp wins on conflicts</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Trained model</span>
+                <span class="about-detail-value">Only loaded if the imported version is higher than your local version</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Older import</span>
+                <span class="about-detail-value">Labels are still imported, but the trained model is skipped — retrain to incorporate new labels</span>
+            </div>
+        </div>
+        <p>This means you can never accidentally overwrite a better model with an older one.</p>
+    </div>
+</div>
+
 <!-- Tips -->
 <div class="dashboard-section">
     <h2>Tips for Faster Learning</h2>
