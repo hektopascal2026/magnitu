@@ -37,6 +37,33 @@
 </div>
 {% endif %}
 
+<!-- Smart Queue Summary -->
+{% if has_model and sampling_stats %}
+<div class="sampling-bar">
+    <span class="sampling-bar-label">Smart Queue</span>
+    {% if sampling_stats.get('uncertain', 0) > 0 %}
+        <span class="sampling-pill sampling-pill-uncertain">
+            <span class="sampling-pill-count">{{ sampling_stats.uncertain }}</span> uncertain
+        </span>
+    {% endif %}
+    {% if sampling_stats.get('conflict', 0) > 0 %}
+        <span class="sampling-pill sampling-pill-conflict">
+            <span class="sampling-pill-count">{{ sampling_stats.conflict }}</span> conflict
+        </span>
+    {% endif %}
+    {% if sampling_stats.get('diverse', 0) > 0 %}
+        <span class="sampling-pill sampling-pill-diverse">
+            <span class="sampling-pill-count">{{ sampling_stats.diverse }}</span> diverse
+        </span>
+    {% endif %}
+    {% if sampling_stats.get('new', 0) > 0 %}
+        <span class="sampling-pill sampling-pill-new">
+            <span class="sampling-pill-count">{{ sampling_stats.new }}</span> new
+        </span>
+    {% endif %}
+</div>
+{% endif %}
+
 <!-- Entry Cards -->
 <div class="entries-section" id="entriesSection">
     {% if entries %}
@@ -44,6 +71,7 @@
             <div class="entry-card {% if entry._label %}labeled labeled-{{ entry._label }}{% endif %}"
                  data-entry-type="{{ entry.entry_type }}"
                  data-entry-id="{{ entry.entry_id }}"
+                 data-sampling-reason="{{ entry._sampling_reason or 'new' }}"
                  id="card-{{ entry.entry_type }}-{{ entry.entry_id }}">
                 <div class="entry-header">
                     <span class="entry-source-tag source-{{ entry.source_type }}">
@@ -51,6 +79,14 @@
                     </span>
                     {% if entry.source_category %}
                         <span class="entry-category">{{ entry.source_category }}</span>
+                    {% endif %}
+                    {% if entry._sampling_reason and entry._sampling_reason != 'new' %}
+                        <span class="sampling-reason sampling-reason-{{ entry._sampling_reason }}">
+                            {{ entry._sampling_reason }}
+                        </span>
+                        {% if entry._sampling_detail %}
+                            <span class="sampling-detail">{{ entry._sampling_detail }}</span>
+                        {% endif %}
                     {% endif %}
                     {% if entry._label %}
                         <span class="entry-current-label label-{{ entry._label }}">

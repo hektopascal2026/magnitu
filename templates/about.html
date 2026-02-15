@@ -1,0 +1,171 @@
+{% extends "layout.html" %}
+{% block title %}About — Magnitu{% endblock %}
+
+{% block content %}
+<div class="dashboard-section">
+    <h2>How Magnitu Learns</h2>
+    <p class="section-desc">Magnitu is your personal relevance engine. It watches what you care about and learns to separate signal from noise — so the important stories float to the top.</p>
+</div>
+
+<!-- The Loop -->
+<div class="dashboard-section">
+    <h2>The Learning Loop</h2>
+    <div class="about-steps">
+        <div class="about-step">
+            <div class="about-step-number">1</div>
+            <div class="about-step-body">
+                <h3>Sync</h3>
+                <p>Pull new entries from Seismo — RSS articles, emails, Lex bulletins. Everything lands in a local queue for you to review.</p>
+            </div>
+        </div>
+        <div class="about-step">
+            <div class="about-step-number">2</div>
+            <div class="about-step-body">
+                <h3>Label</h3>
+                <p>You read entries and assign one of four labels. Each label is a training example that teaches the model what matters to you.</p>
+                <div class="about-labels-grid">
+                    <span class="label-dist-item label-investigation_lead">Investigation Lead</span>
+                    <span class="label-dist-item label-important">Important</span>
+                    <span class="label-dist-item label-background">Background</span>
+                    <span class="label-dist-item label-noise">Noise</span>
+                </div>
+            </div>
+        </div>
+        <div class="about-step">
+            <div class="about-step-number">3</div>
+            <div class="about-step-body">
+                <h3>Train</h3>
+                <p>Hit <strong>Train</strong> and Magnitu builds a new model from all your labels. It learns which words, phrases, and sources predict each category. Minimum {{ config.min_labels_to_train or 20 }} labels to start; more labels = better accuracy.</p>
+            </div>
+        </div>
+        <div class="about-step">
+            <div class="about-step-number">4</div>
+            <div class="about-step-body">
+                <h3>Score &amp; Push</h3>
+                <p>The model scores every entry with a relevance number (0–100) and a predicted label. Push to Seismo so the main feed can sort by relevance.</p>
+            </div>
+        </div>
+        <div class="about-step">
+            <div class="about-step-number">5</div>
+            <div class="about-step-body">
+                <h3>Review &amp; Correct</h3>
+                <p>Check the <strong>Top 30</strong> page to see what the model thinks is most important. Reclassify anything it got wrong — these corrections are the highest-signal training data you can give it.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Under the Hood -->
+<div class="dashboard-section">
+    <h2>Under the Hood</h2>
+
+    <div class="about-section">
+        <h3>The Classifier</h3>
+        <p>Magnitu uses a <strong>Logistic Regression</strong> model (via scikit-learn) with TF-IDF text features and one-hot encoded source types. It's fast to train, interpretable, and works well with hundreds of labels — no GPU required.</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">Text features</span>
+                <span class="about-detail-value">TF-IDF, up to 10k unigrams + bigrams</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Structured features</span>
+                <span class="about-detail-value">Source type (RSS, Substack, Email, Lex EU/CH)</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Class balancing</span>
+                <span class="about-detail-value">Balanced weights — rare classes aren't drowned out</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="about-section">
+        <h3>The Recipe</h3>
+        <p>After training, Magnitu <strong>distills</strong> the model into a lightweight keyword-weight recipe (JSON). This recipe is pushed to Seismo so it can do basic scoring in PHP without needing Python. The recipe is an approximation — the full model is always more accurate.</p>
+    </div>
+
+    <div class="about-section">
+        <h3>The Relevance Score</h3>
+        <p>Each entry gets a composite score from 0 to 100, calculated from the model's class probabilities:</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">Investigation Lead</span>
+                <span class="about-detail-value">weight 1.0 (highest)</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Important</span>
+                <span class="about-detail-value">weight 0.66</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Background</span>
+                <span class="about-detail-value">weight 0.33</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Noise</span>
+                <span class="about-detail-value">weight 0.0</span>
+            </div>
+        </div>
+        <p>So an entry the model is 80% sure is an Investigation Lead scores ~80, while one it thinks is pure Noise scores ~0.</p>
+    </div>
+</div>
+
+<!-- Smart Sampling -->
+<div class="dashboard-section">
+    <h2>Smart Labeling Queue</h2>
+    <p class="section-desc">Once a model exists, the labeling page doesn't just show the newest entries. It uses active learning strategies to surface the entries that will improve the model fastest.</p>
+
+    <div class="about-sampling-grid">
+        <div class="about-sampling-item">
+            <span class="sampling-pill sampling-pill-uncertain" style="display:inline-block; margin-bottom:6px;">Uncertain</span>
+            <p>Entries where the model can't decide — its probability distribution is flat across classes. Labeling these resolves the model's biggest confusions.</p>
+        </div>
+        <div class="about-sampling-item">
+            <span class="sampling-pill sampling-pill-conflict" style="display:inline-block; margin-bottom:6px;">Conflict</span>
+            <p>Entries where the full ML model and the lightweight recipe disagree on the predicted label. These reveal where the recipe approximation breaks down.</p>
+        </div>
+        <div class="about-sampling-item">
+            <span class="sampling-pill sampling-pill-diverse" style="display:inline-block; margin-bottom:6px;">Diverse</span>
+            <p>Entries from source categories that are underrepresented in your labels. If you've labeled 100 tech stories but 0 from local government, it surfaces one to broaden the model's horizons.</p>
+        </div>
+        <div class="about-sampling-item">
+            <span class="sampling-pill sampling-pill-new" style="display:inline-block; margin-bottom:6px;">New</span>
+            <p>The newest unlabeled entries — keeps the feed fresh and ensures recent content gets reviewed.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Tips -->
+<div class="dashboard-section">
+    <h2>Tips for Faster Learning</h2>
+    <div class="about-tips">
+        <div class="about-tip">
+            <strong>Label consistently.</strong> If two similar articles should be "Important", label them both "Important". The model learns from patterns in your choices.
+        </div>
+        <div class="about-tip">
+            <strong>Correct the Top 30.</strong> When the model is confidently wrong, that correction teaches it more than 10 random labels.
+        </div>
+        <div class="about-tip">
+            <strong>Retrain often.</strong> After every ~10 new labels, hit Train to incorporate your latest feedback. Each version builds on all previous labels.
+        </div>
+        <div class="about-tip">
+            <strong>Don't skip the "boring" ones.</strong> Labeling Noise and Background entries is just as valuable as labeling Investigation Leads — the model needs to know what to filter out.
+        </div>
+        <div class="about-tip">
+            <strong>Check the Dashboard.</strong> Watch accuracy and F1 score climb across model versions. If a class has very few labels, focus your next session on it.
+        </div>
+    </div>
+</div>
+
+<!-- Keyboard Shortcuts -->
+<div class="dashboard-section">
+    <h2>Keyboard Shortcuts (Label Page)</h2>
+    <div class="shortcuts-grid">
+        <span class="shortcut"><kbd>1</kbd> Investigation Lead</span>
+        <span class="shortcut"><kbd>2</kbd> Important</span>
+        <span class="shortcut"><kbd>3</kbd> Background</span>
+        <span class="shortcut"><kbd>4</kbd> Noise</span>
+        <span class="shortcut"><kbd>j</kbd> / <kbd>&darr;</kbd> Next card</span>
+        <span class="shortcut"><kbd>k</kbd> / <kbd>&uarr;</kbd> Previous card</span>
+        <span class="shortcut"><kbd>u</kbd> Undo label</span>
+    </div>
+</div>
+{% endblock %}

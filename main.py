@@ -14,6 +14,7 @@ import sync
 import pipeline
 import explainer
 import distiller
+import sampler
 from config import get_config, save_config, BASE_DIR
 
 app = FastAPI(title="Magnitu", version="0.1.0")
@@ -43,17 +44,26 @@ def _base_context(request: Request) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 async def labeling_page(request: Request):
-    """Main labeling page."""
+    """Main labeling page — smart-sampled for active learning."""
     ctx = _base_context(request)
-    entries = db.get_unlabeled_entries(limit=30)
+    entries = sampler.get_smart_entries(limit=30)
 
-    # Add existing labels and explanations if model exists
+    # Add existing labels
     for entry in entries:
         entry["_label"] = db.get_label(entry["entry_type"], entry["entry_id"])
 
     ctx["entries"] = entries
     ctx["unlabeled_count"] = len([e for e in entries if e["_label"] is None])
     ctx["today_labels"] = _today_label_count()
+
+    # Sampling stats for the UI
+    reasons = {}
+    for e in entries:
+        r = e.get("_sampling_reason", "new")
+        reasons[r] = reasons.get(r, 0) + 1
+    ctx["sampling_stats"] = reasons
+    ctx["has_model"] = ctx["active_model"] is not None
+
     return templates.TemplateResponse("labeling.html", ctx)
 
 
@@ -114,6 +124,13 @@ async def top_page(request: Request):
     ctx["accuracy"] = round(correct / len(labeled_in_top) * 100, 1) if labeled_in_top else None
     
     return templates.TemplateResponse("top.html", ctx)
+
+
+@app.get("/about", response_class=HTMLResponse)
+async def about_page(request: Request):
+    """How Magnitu learns — explains the ML pipeline to the user."""
+    ctx = _base_context(request)
+    return templates.TemplateResponse("about.html", ctx)
 
 
 @app.get("/settings", response_class=HTMLResponse)
