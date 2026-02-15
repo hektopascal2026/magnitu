@@ -229,10 +229,11 @@ body {
     opacity: 1;
 }
 
-.entry-card.labeled-investigation_lead { border-left: 5px solid #FF6B6B; }
-.entry-card.labeled-important { border-left: 5px solid #FFA94D; }
-.entry-card.labeled-background { border-left: 5px solid #74C0FC; }
-.entry-card.labeled-noise { border-left: 5px solid #e0e0e0; }
+/* Colored left border only on labeling page (not Top 30) */
+.progress-section ~ .entries-section .entry-card.labeled-investigation_lead { border-left: 5px solid #FF6B6B; }
+.progress-section ~ .entries-section .entry-card.labeled-important { border-left: 5px solid #FFA94D; }
+.progress-section ~ .entries-section .entry-card.labeled-background { border-left: 5px solid #74C0FC; }
+.progress-section ~ .entries-section .entry-card.labeled-noise { border-left: 5px solid #e0e0e0; }
 
 .entry-header {
     display: flex;
@@ -308,7 +309,6 @@ body {
 .entry-source {
     font-size: 12px; /* small */
     color: #000000;
-    margin-bottom: 8px;
 }
 
 /* ═══ Label Buttons ═══ */

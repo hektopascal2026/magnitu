@@ -37,12 +37,14 @@
                 <div class="entry-card {% if item.user_label %}labeled labeled-{{ item.user_label }}{% endif %}"
                      data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" data-predicted="{{ s.predicted_label }}">
 
-                    <!-- Header: source left, rank|score box right -->
+                    <!-- Header: source tag (lex only) left, rank|score box right -->
                     <div class="top-card-header">
                         <div class="top-card-header-left">
-                            <span class="entry-source-tag source-{{ e.source_type }}">{{ e.source_type }}</span>
-                            {% if e.source_category %}
-                                <span class="entry-category">{{ e.source_category }}</span>
+                            {% if e.source_type and e.source_type.startswith('lex') %}
+                                <span class="entry-source-tag source-{{ e.source_type }}">{{ e.source_type }}</span>
+                                {% if e.source_category %}
+                                    <span class="entry-category">{{ e.source_category }}</span>
+                                {% endif %}
                             {% endif %}
                         </div>
                         <div class="top-rank-score">
@@ -72,9 +74,7 @@
                             <button class="btn-why" data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" title="Why did the model score this entry?">Why?</button>
                         </div>
                         <div class="top-card-footer-right">
-                            {% if e.source_name %}
-                                <span class="entry-source">{{ e.source_name }}</span>
-                            {% endif %}
+                            <span class="entry-source">{{ e.source_name or e.source_type }}</span>
                             {% if e.published_date %}
                                 <span class="entry-date">{{ e.published_date[:10] }}</span>
                             {% endif %}
