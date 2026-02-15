@@ -52,9 +52,9 @@ def create_profile(name: str, description: str = "") -> dict:
     }
 
 
-def update_profile(name: str = None, description: str = None):
-    """Update name and/or description of current profile."""
-    db.update_model_profile(model_name=name, description=description)
+def update_profile(description: str = None):
+    """Update the description of the current profile. Name is immutable once set."""
+    db.update_model_profile(description=description)
 
 
 # ─── Version chain ───
@@ -141,6 +141,89 @@ def export_model(output_path: str = None) -> str:
                 shutil.copy2(str(recipe_path), str(tmp_dir / "recipe.json"))
 
         # Zip it
+        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for file_path in tmp_dir.iterdir():
+                zf.write(str(file_path), file_path.name)
+
+    return output_path
+
+
+# ─── Export as New Model (fork) ───
+
+def export_as_new_model(new_name: str, new_description: str, output_path: str = None) -> str:
+    """
+    Export the current model data as a brand-new model with a fresh UUID.
+    The manifest records the parent model's name and UUID as immutable lineage.
+    Returns the path to the created .magnitu file.
+    """
+    parent_profile = get_profile()
+    if not parent_profile:
+        raise ValueError("No model profile configured. Create one first.")
+
+    new_name = new_name.strip()
+    if not new_name:
+        raise ValueError("New model name is required.")
+
+    active_model = db.get_active_model()
+    version_chain = _get_version_chain()
+
+    # Build manifest with new identity but parent lineage
+    manifest = {
+        "model_name": new_name,
+        "model_uuid": uuid.uuid4().hex,
+        "description": new_description.strip(),
+        "created_at": datetime.utcnow().isoformat(),
+        "exported_at": datetime.utcnow().isoformat(),
+        "version": active_model["version"] if active_model else 0,
+        "label_count": db.get_label_count(),
+        "metrics": {},
+        "version_chain": version_chain,
+        # Immutable parent lineage — cannot be changed or suppressed
+        "based_on": {
+            "model_name": parent_profile["model_name"],
+            "model_uuid": parent_profile["model_uuid"],
+            "description": parent_profile.get("description", ""),
+            "version_at_fork": active_model["version"] if active_model else 0,
+            "forked_at": datetime.utcnow().isoformat(),
+        },
+    }
+
+    if active_model:
+        manifest["metrics"] = {
+            "accuracy": active_model.get("accuracy", 0.0),
+            "f1": active_model.get("f1_score", 0.0),
+            "precision": active_model.get("precision_score", 0.0),
+            "recall": active_model.get("recall_score", 0.0),
+        }
+
+    # Export labels with entry data
+    labels = db.export_labels()
+
+    # Default output path
+    if not output_path:
+        safe_name = new_name.replace(" ", "_").lower()
+        output_path = str(MODELS_DIR / f"{safe_name}.magnitu")
+
+    # Create zip
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+
+        with open(tmp_dir / "manifest.json", "w") as f:
+            json.dump(manifest, f, indent=2, ensure_ascii=False)
+
+        with open(tmp_dir / "labels.json", "w") as f:
+            json.dump(labels, f, ensure_ascii=False)
+
+        if active_model and active_model.get("model_path"):
+            model_path = Path(active_model["model_path"])
+            if model_path.exists():
+                shutil.copy2(str(model_path), str(tmp_dir / "model.joblib"))
+
+        if active_model and active_model.get("recipe_path"):
+            recipe_path = Path(active_model["recipe_path"])
+            if recipe_path.exists():
+                shutil.copy2(str(recipe_path), str(tmp_dir / "recipe.json"))
+
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for file_path in tmp_dir.iterdir():
                 zf.write(str(file_path), file_path.name)

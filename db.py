@@ -345,14 +345,12 @@ def set_model_profile(model_name: str, model_uuid: str, description: str = "",
     conn.close()
 
 
-def update_model_profile(model_name: str = None, description: str = None):
-    """Update name and/or description of the current profile."""
+def update_model_profile(description: str = None):
+    """Update description of the current profile. Name is immutable once set."""
     profile = get_model_profile()
     if not profile:
         return
     conn = get_db()
-    if model_name is not None:
-        conn.execute("UPDATE model_profile SET model_name = ?", (model_name,))
     if description is not None:
         conn.execute("UPDATE model_profile SET description = ?", (description,))
     conn.commit()

@@ -185,11 +185,10 @@ async def create_model(request: Request):
 
 @app.post("/api/model/update")
 async def update_model(request: Request):
-    """Update model name/description."""
+    """Update model description. Name is immutable once set."""
     data = await request.json()
-    name = data.get("name")
     description = data.get("description")
-    model_manager.update_profile(name=name, description=description)
+    model_manager.update_profile(description=description)
     return {"success": True}
 
 
@@ -201,6 +200,27 @@ async def export_model():
         path = model_manager.export_model()
         profile = model_manager.get_profile()
         safe_name = (profile["model_name"] if profile else "model").replace(" ", "_").lower()
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=f"{safe_name}.magnitu",
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/model/fork")
+async def fork_model(request: Request):
+    """Export the current model as a new model with a fresh identity."""
+    from fastapi.responses import FileResponse
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+    if not name:
+        return JSONResponse({"success": False, "error": "Model name is required."}, status_code=400)
+    try:
+        path = model_manager.export_as_new_model(name, description)
+        safe_name = name.replace(" ", "_").lower()
         return FileResponse(
             path,
             media_type="application/zip",
