@@ -34,22 +34,24 @@
             {% for item in top_entries %}
                 {% set e = item.entry %}
                 {% set s = item.score %}
-                <div class="entry-card {% if item.user_label %}labeled labeled-{{ item.user_label }}{% endif %} {% if item.match == false %}top-mismatch{% endif %}"
-                     style="opacity: 1;">
-                    <div class="entry-header">
-                        <span class="entry-source-tag source-{{ e.source_type }}">{{ e.source_type }}</span>
-                        {% if e.source_category %}
-                            <span class="entry-category">{{ e.source_category }}</span>
-                        {% endif %}
-                        <span class="top-rank">#{{ loop.index }}</span>
-                        <span class="top-score-pill top-badge-{{ s.predicted_label }}">
-                            {{ (s.relevance_score * 100) | round(0) }} · {{ s.predicted_label | replace('_', ' ') }}
-                        </span>
-                        {% if e.published_date %}
-                            <span class="entry-date">{{ e.published_date[:10] }}</span>
-                        {% endif %}
+                <div class="entry-card {% if item.user_label %}labeled labeled-{{ item.user_label }}{% endif %}"
+                     data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" data-predicted="{{ s.predicted_label }}">
+
+                    <!-- Header: source left, rank|score box right -->
+                    <div class="top-card-header">
+                        <div class="top-card-header-left">
+                            <span class="entry-source-tag source-{{ e.source_type }}">{{ e.source_type }}</span>
+                            {% if e.source_category %}
+                                <span class="entry-category">{{ e.source_category }}</span>
+                            {% endif %}
+                        </div>
+                        <div class="top-rank-score">
+                            <span class="top-rank-half">#{{ loop.index }}</span>
+                            <span class="top-score-half">{{ (s.relevance_score * 100) | round(0) }}</span>
+                        </div>
                     </div>
 
+                    <!-- Title -->
                     <h3 class="entry-title">
                         {% if e.link %}
                             <a href="{{ e.link }}" target="_blank" rel="noopener">{{ e.title }}</a>
@@ -58,32 +60,31 @@
                         {% endif %}
                     </h3>
 
+                    <!-- Description -->
                     {% if e.description %}
-                        <div class="entry-content">{{ e.description[:300] }}{% if e.description|length > 300 %}...{% endif %}</div>
+                        <div class="entry-content">{{ e.description[:200] }}{% if e.description|length > 200 %}...{% endif %}</div>
                     {% endif %}
 
-                    <div class="top-entry-meta">
-                        {% if e.source_name %}
-                            <span class="entry-source">{{ e.source_name }}</span>
-                        {% endif %}
-                        <div class="top-validation">
-                            {% if item.user_label %}
-                                <span class="entry-current-label label-{{ item.user_label }}" data-role="current-label">
-                                    {{ item.user_label | replace('_', ' ') }}
-                                </span>
-                                {% if item.match %}
-                                    <span class="top-verdict-badge top-correct-bg" data-role="verdict">match</span>
-                                {% else %}
-                                    <span class="top-verdict-badge top-wrong-bg" data-role="verdict">mismatch</span>
-                                {% endif %}
-                            {% else %}
-                                <span class="top-no-label" data-role="no-label">not labeled</span>
+                    <!-- Footer: reclassify+why left, source+date right -->
+                    <div class="top-card-footer">
+                        <div class="top-card-footer-left">
+                            <button class="btn-reclassify" title="Assign or change your label">Reclassify</button>
+                            <button class="btn-why" data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" title="Why did the model score this entry?">Why?</button>
+                        </div>
+                        <div class="top-card-footer-right">
+                            {% if e.source_name %}
+                                <span class="entry-source">{{ e.source_name }}</span>
                             {% endif %}
-                            <button class="btn-reclassify" data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" data-predicted="{{ s.predicted_label }}" title="Assign or change your label">Reclassify</button>
+                            {% if e.published_date %}
+                                <span class="entry-date">{{ e.published_date[:10] }}</span>
+                            {% endif %}
                         </div>
                     </div>
 
-                    <!-- Inline label buttons (hidden until Reclassify is clicked) -->
+                    <!-- Why explanation (hidden until Why? clicked) -->
+                    <div class="top-why-panel" style="display:none;"></div>
+
+                    <!-- Reclassify label buttons (hidden until clicked) -->
                     <div class="top-label-buttons" data-for="{{ e.entry_type }}-{{ e.entry_id }}" style="display:none;">
                         <button class="label-btn label-btn-investigation {% if item.user_label == 'investigation_lead' %}active{% endif %}" data-label="investigation_lead" data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}">
                             <span class="label-key">1</span> Investigation
@@ -99,13 +100,6 @@
                         </button>
                     </div>
 
-                    {% if s.probabilities %}
-                        <div class="top-probabilities">
-                            {% for cls, prob in s.probabilities.items() %}
-                                <span class="top-prob">{{ cls | replace('_', ' ') }}: {{ (prob * 100) | round(0) }}%</span>
-                            {% endfor %}
-                        </div>
-                    {% endif %}
                 </div>
             {% endfor %}
         </div>
@@ -116,24 +110,63 @@
 {% block scripts %}
 <script>
 (function() {
-    // Toggle label buttons on Reclassify click
     document.addEventListener('click', function(e) {
+        /* ── Reclassify toggle ── */
         var reclBtn = e.target.closest('.btn-reclassify');
         if (reclBtn) {
-            var key = reclBtn.dataset.entryType + '-' + reclBtn.dataset.entryId;
-            var panel = document.querySelector('.top-label-buttons[data-for="' + key + '"]');
+            var card = reclBtn.closest('.entry-card');
+            var panel = card.querySelector('.top-label-buttons');
             if (panel) {
                 var visible = panel.style.display !== 'none';
-                // Hide all other open panels
-                document.querySelectorAll('.top-label-buttons').forEach(function(p) {
-                    p.style.display = 'none';
-                });
+                document.querySelectorAll('.top-label-buttons').forEach(function(p) { p.style.display = 'none'; });
                 panel.style.display = visible ? 'none' : 'flex';
             }
             return;
         }
 
-        // Handle label button clicks
+        /* ── Why? button ── */
+        var whyBtn = e.target.closest('.btn-why');
+        if (whyBtn) {
+            var card = whyBtn.closest('.entry-card');
+            var whyPanel = card.querySelector('.top-why-panel');
+            if (whyPanel.style.display !== 'none') {
+                whyPanel.style.display = 'none';
+                whyBtn.textContent = 'Why?';
+                return;
+            }
+            whyBtn.textContent = '…';
+            var entryType = whyBtn.dataset.entryType;
+            var entryId = whyBtn.dataset.entryId;
+            fetch('/api/explain/' + encodeURIComponent(entryType) + '/' + encodeURIComponent(entryId))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (data.error) {
+                        whyPanel.innerHTML = '<span class="why-error">' + data.error + '</span>';
+                    } else {
+                        var features = (data.top_features || []).slice(0, 8);
+                        var html = '<span class="why-label">Magnitu: ' + (data.predicted_label || '').replace(/_/g, ' ') +
+                            ' (' + Math.round((data.confidence || 0) * 100) + '% confidence)</span>';
+                        html += '<span class="why-features">';
+                        features.forEach(function(f, i) {
+                            var sign = f.weight >= 0 ? '+' : '';
+                            html += (i > 0 ? '  ' : '') +
+                                '<span class="why-feat">' + f.feature + ' ' + sign + parseFloat(f.weight).toFixed(2) + '</span>';
+                        });
+                        html += '</span>';
+                        whyPanel.innerHTML = html;
+                    }
+                    whyPanel.style.display = 'block';
+                    whyBtn.textContent = 'Why?';
+                })
+                .catch(function() {
+                    whyPanel.innerHTML = '<span class="why-error">Could not load explanation.</span>';
+                    whyPanel.style.display = 'block';
+                    whyBtn.textContent = 'Why?';
+                });
+            return;
+        }
+
+        /* ── Label button clicks ── */
         var labelBtn = e.target.closest('.top-label-buttons .label-btn');
         if (!labelBtn) return;
 
@@ -142,7 +175,7 @@
         var label = labelBtn.dataset.label;
         var card = labelBtn.closest('.entry-card');
         var panel = labelBtn.closest('.top-label-buttons');
-        var predicted = card.querySelector('.btn-reclassify').dataset.predicted;
+        var predicted = card.dataset.predicted;
 
         var formData = new FormData();
         formData.append('entry_type', entryType);
@@ -153,53 +186,14 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (!data.success) return;
-
-                // Update active state on buttons
                 panel.querySelectorAll('.label-btn').forEach(function(b) {
                     b.classList.toggle('active', b.dataset.label === label);
                 });
-
-                // Update card border styling
                 card.className = card.className.replace(/labeled-\S+/g, '');
                 if (!card.classList.contains('labeled')) card.classList.add('labeled');
                 card.classList.add('labeled-' + label);
-
-                // Update mismatch state
-                var isMatch = (label === predicted);
-                card.classList.toggle('top-mismatch', !isMatch);
-
-                // Update the validation area
-                var validation = card.querySelector('.top-validation');
-                var currentLabel = validation.querySelector('[data-role="current-label"]');
-                var verdict = validation.querySelector('[data-role="verdict"]');
-                var noLabel = validation.querySelector('[data-role="no-label"]');
-
-                if (noLabel) noLabel.remove();
-
-                if (!currentLabel) {
-                    currentLabel = document.createElement('span');
-                    currentLabel.setAttribute('data-role', 'current-label');
-                    validation.insertBefore(currentLabel, validation.querySelector('.btn-reclassify'));
-                }
-                currentLabel.className = 'entry-current-label label-' + label;
-                currentLabel.textContent = label.replace(/_/g, ' ');
-
-                if (!verdict) {
-                    verdict = document.createElement('span');
-                    verdict.setAttribute('data-role', 'verdict');
-                    validation.insertBefore(verdict, validation.querySelector('.btn-reclassify'));
-                }
-                verdict.className = 'top-verdict-badge ' + (isMatch ? 'top-correct-bg' : 'top-wrong-bg');
-                verdict.textContent = isMatch ? 'match' : 'mismatch';
-
-                // Collapse the label panel after a moment
                 setTimeout(function() { panel.style.display = 'none'; }, 300);
-
-                // Recalculate and update accuracy summary
                 updateAccuracy();
-            })
-            .catch(function(err) {
-                if (typeof flash === 'function') flash('Error: ' + err.message, 'error');
             });
     });
 
@@ -207,14 +201,12 @@
         var cards = document.querySelectorAll('.entries-section .entry-card');
         var labeled = 0, correct = 0;
         cards.forEach(function(c) {
-            var cl = c.querySelector('[data-role="current-label"]');
-            var vd = c.querySelector('[data-role="verdict"]');
-            if (cl) {
+            if (c.classList.contains('labeled')) {
                 labeled++;
-                if (vd && vd.textContent.trim() === 'match') correct++;
+                var userLabel = (c.className.match(/labeled-(\S+)/) || [])[1];
+                if (userLabel === c.dataset.predicted) correct++;
             }
         });
-        // Update stat cards
         var statCards = document.querySelectorAll('.top-accuracy-summary .stat-card');
         if (statCards.length >= 3 && labeled > 0) {
             var acc = Math.round(correct / labeled * 1000) / 10;
