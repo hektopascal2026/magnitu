@@ -166,7 +166,7 @@ fi
 echo ""
 
 # ── Test connection ──
-echo "  [5/5] Testing connection to Seismo..."
+echo "  [5/6] Testing connection to Seismo..."
 TEST_RESULT=$("$INSTALL_DIR/.venv/bin/python" -c "
 import sys
 sys.path.insert(0, '$INSTALL_DIR')
@@ -177,6 +177,64 @@ if not ok:
     sys.exit(1)
 " 2>&1) || true
 echo "         $TEST_RESULT"
+echo ""
+
+# ── Model setup ──
+echo "  [6/6] Model setup"
+echo ""
+
+# Check if a model profile already exists
+HAS_PROFILE=$("$INSTALL_DIR/.venv/bin/python" -c "
+import sys
+sys.path.insert(0, '$INSTALL_DIR')
+import model_manager
+print('yes' if model_manager.has_profile() else 'no')
+" 2>&1) || HAS_PROFILE="no"
+
+if [ "$HAS_PROFILE" = "yes" ]; then
+    echo "         Model profile already configured."
+else
+    echo "         Every Magnitu instance needs a model profile."
+    echo "         You can create a new model or load an existing .magnitu file."
+    echo ""
+    echo "         1) Create a new model"
+    echo "         2) Load a .magnitu file"
+    echo "         3) Skip (set up later in the browser)"
+    read -r -p "         Choice [1/2/3]: " MODEL_CHOICE
+
+    if [ "$MODEL_CHOICE" = "1" ]; then
+        echo ""
+        read -r -p "         Model name (e.g. pascal1): " MODEL_NAME
+        while [ -z "$MODEL_NAME" ]; do
+            echo "         Name is required."
+            read -r -p "         Model name: " MODEL_NAME
+        done
+        read -r -p "         Short description: " MODEL_DESC
+        "$INSTALL_DIR/.venv/bin/python" -c "
+import sys
+sys.path.insert(0, '$INSTALL_DIR')
+import model_manager
+p = model_manager.create_profile('$MODEL_NAME', '$MODEL_DESC')
+print('Created model: ' + p['model_name'] + ' (' + p['model_uuid'][:8] + '...)')
+" 2>&1
+    elif [ "$MODEL_CHOICE" = "2" ]; then
+        echo ""
+        read -r -p "         Path to .magnitu file: " MAGNITU_FILE
+        if [ -f "$MAGNITU_FILE" ]; then
+            "$INSTALL_DIR/.venv/bin/python" -c "
+import sys
+sys.path.insert(0, '$INSTALL_DIR')
+import model_manager
+result = model_manager.import_model('$MAGNITU_FILE')
+print(result.get('message', 'Imported.'))
+" 2>&1
+        else
+            echo "         File not found. You can set up a model later in the browser."
+        fi
+    else
+        echo "         Skipped. You'll be prompted when you first open Magnitu."
+    fi
+fi
 echo ""
 
 # ── Done ──

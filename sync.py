@@ -36,15 +36,18 @@ def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -
     return len(entries)
 
 
-def push_scores(scores: list[dict], model_version: int) -> dict:
+def push_scores(scores: list[dict], model_version: int, model_meta: dict = None) -> dict:
     """
     Push batch of scores to Seismo.
     Each score: {entry_type, entry_id, relevance_score, predicted_label, explanation}
+    model_meta: optional {model_name, model_description, model_version, model_trained_at}
     """
     payload = {
         "scores": scores,
         "model_version": model_version,
     }
+    if model_meta:
+        payload["model_meta"] = model_meta
 
     result = _request("POST", {"action": "magnitu_scores"}, json=payload).json()
     db.log_sync("push", len(scores), f"scores pushed, model v{model_version}")

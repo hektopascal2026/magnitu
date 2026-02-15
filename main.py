@@ -15,6 +15,7 @@ import pipeline
 import explainer
 import distiller
 import sampler
+import model_manager
 from config import get_config, save_config, BASE_DIR
 
 app = FastAPI(title="Magnitu", version="0.1.0")
@@ -30,6 +31,7 @@ def _base_context(request: Request) -> dict:
     """Common context for all templates."""
     config = get_config()
     active_model = db.get_active_model()
+    profile = model_manager.get_profile()
     return {
         "request": request,
         "config": config,
@@ -37,6 +39,7 @@ def _base_context(request: Request) -> dict:
         "entry_count": db.get_entry_count(),
         "active_model": active_model,
         "label_distribution": db.get_label_distribution(),
+        "profile": profile,
     }
 
 
@@ -45,6 +48,9 @@ def _base_context(request: Request) -> dict:
 @app.get("/", response_class=HTMLResponse)
 async def labeling_page(request: Request):
     """Main labeling page — smart-sampled for active learning."""
+    # First-run: redirect to setup if no model profile exists
+    if not model_manager.has_profile():
+        return RedirectResponse("/setup", status_code=302)
     ctx = _base_context(request)
     entries = sampler.get_smart_entries(limit=30)
 
@@ -141,6 +147,93 @@ async def settings_page(request: Request):
     return templates.TemplateResponse("settings.html", ctx)
 
 
+@app.get("/model", response_class=HTMLResponse)
+async def model_page(request: Request):
+    """Model profile, export/import, version history."""
+    if not model_manager.has_profile():
+        return RedirectResponse("/setup", status_code=302)
+    ctx = _base_context(request)
+    ctx["models"] = db.get_all_models()
+    return templates.TemplateResponse("model.html", ctx)
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_page(request: Request):
+    """First-run setup: create or load a model."""
+    # If profile already exists, redirect to model page
+    if model_manager.has_profile():
+        return RedirectResponse("/model", status_code=302)
+    ctx = _base_context(request)
+    return templates.TemplateResponse("setup.html", ctx)
+
+
+# ─── API: Model ───
+
+@app.post("/api/model/create")
+async def create_model(request: Request):
+    """Create a new model profile."""
+    data = await request.json()
+    name = (data.get("name") or "").strip()
+    description = (data.get("description") or "").strip()
+    if not name:
+        return JSONResponse({"success": False, "error": "Model name is required."}, status_code=400)
+    if model_manager.has_profile():
+        return JSONResponse({"success": False, "error": "A model profile already exists."}, status_code=400)
+    profile = model_manager.create_profile(name, description)
+    return {"success": True, "profile": profile}
+
+
+@app.post("/api/model/update")
+async def update_model(request: Request):
+    """Update model name/description."""
+    data = await request.json()
+    name = data.get("name")
+    description = data.get("description")
+    model_manager.update_profile(name=name, description=description)
+    return {"success": True}
+
+
+@app.get("/api/model/export")
+async def export_model():
+    """Export the current model as a .magnitu file download."""
+    from fastapi.responses import FileResponse
+    try:
+        path = model_manager.export_model()
+        profile = model_manager.get_profile()
+        safe_name = (profile["model_name"] if profile else "model").replace(" ", "_").lower()
+        return FileResponse(
+            path,
+            media_type="application/zip",
+            filename=f"{safe_name}.magnitu",
+        )
+    except Exception as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/model/import")
+async def import_model_upload(request: Request):
+    """Import a .magnitu file (multipart upload)."""
+    import tempfile
+    form = await request.form()
+    upload = form.get("file")
+    if not upload:
+        return JSONResponse({"success": False, "error": "No file uploaded."}, status_code=400)
+
+    # Save to temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".magnitu") as tmp:
+        content = await upload.read()
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        result = model_manager.import_model(tmp_path)
+        return {"success": True, **result}
+    except Exception as e:
+        return JSONResponse({"success": False, "error": str(e)}, status_code=400)
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+
 # ─── API: Labeling ───
 
 @app.post("/api/label")
@@ -216,9 +309,20 @@ async def sync_push():
                 "prediction": exp["prediction"],
             }
 
+    # Build model metadata for Seismo
+    profile = model_manager.get_profile()
+    model_meta = None
+    if profile:
+        model_meta = {
+            "model_name": profile.get("model_name", ""),
+            "model_description": profile.get("description", ""),
+            "model_version": model_info["version"],
+            "model_trained_at": model_info.get("trained_at", ""),
+        }
+
     # Push scores
     try:
-        score_result = sync.push_scores(scores, model_info["version"])
+        score_result = sync.push_scores(scores, model_info["version"], model_meta=model_meta)
     except Exception as e:
         raise HTTPException(500, f"Failed to push scores: {e}")
 

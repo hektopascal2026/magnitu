@@ -75,6 +75,14 @@ def init_db():
             synced_at TEXT DEFAULT (datetime('now'))
         );
 
+        CREATE TABLE IF NOT EXISTS model_profile (
+            id INTEGER PRIMARY KEY,
+            model_name TEXT NOT NULL,
+            model_uuid TEXT NOT NULL,
+            description TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_entries_type_id ON entries(entry_type, entry_id);
         CREATE INDEX IF NOT EXISTS idx_labels_type_id ON labels(entry_type, entry_id);
         CREATE INDEX IF NOT EXISTS idx_labels_label ON labels(label);
@@ -311,6 +319,134 @@ def get_recent_syncs(limit: int = 20) -> List[dict]:
     ).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ─── Model profile ───
+
+def get_model_profile() -> Optional[dict]:
+    """Get the current model profile (only one exists at a time)."""
+    conn = get_db()
+    row = conn.execute("SELECT * FROM model_profile ORDER BY id DESC LIMIT 1").fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def set_model_profile(model_name: str, model_uuid: str, description: str = "",
+                      created_at: str = None):
+    """Set the model profile (replaces any existing profile)."""
+    conn = get_db()
+    conn.execute("DELETE FROM model_profile")
+    conn.execute("""
+        INSERT INTO model_profile (model_name, model_uuid, description, created_at)
+        VALUES (?, ?, ?, ?)
+    """, (model_name, model_uuid, description,
+          created_at or datetime.utcnow().isoformat()))
+    conn.commit()
+    conn.close()
+
+
+def update_model_profile(model_name: str = None, description: str = None):
+    """Update name and/or description of the current profile."""
+    profile = get_model_profile()
+    if not profile:
+        return
+    conn = get_db()
+    if model_name is not None:
+        conn.execute("UPDATE model_profile SET model_name = ?", (model_name,))
+    if description is not None:
+        conn.execute("UPDATE model_profile SET description = ?", (description,))
+    conn.commit()
+    conn.close()
+
+
+def has_model_profile() -> bool:
+    """Quick check if a model profile exists."""
+    conn = get_db()
+    row = conn.execute("SELECT COUNT(*) FROM model_profile").fetchone()
+    conn.close()
+    return row[0] > 0
+
+
+def export_labels() -> List[dict]:
+    """Export all labels with their entry text (for .magnitu package).
+    Returns list of dicts with label + entry data needed for retraining."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT l.entry_type, l.entry_id, l.label, l.created_at, l.updated_at,
+               e.title, e.description, e.content, e.link, e.author,
+               e.published_date, e.source_name, e.source_category, e.source_type
+        FROM labels l
+        LEFT JOIN entries e ON l.entry_type = e.entry_type AND l.entry_id = e.entry_id
+        ORDER BY l.updated_at DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def import_labels(labels_list: List[dict]) -> dict:
+    """Import labels from a .magnitu package. Merges with existing (newer wins).
+    Also upserts the associated entry data so retraining works.
+    Returns {imported, skipped, updated}."""
+    conn = get_db()
+    imported = 0
+    skipped = 0
+    updated = 0
+
+    for lbl in labels_list:
+        entry_type = lbl.get("entry_type", "")
+        entry_id = lbl.get("entry_id")
+        label = lbl.get("label", "")
+        lbl_updated_at = lbl.get("updated_at", "")
+
+        if not entry_type or not entry_id or not label:
+            skipped += 1
+            continue
+
+        # Check existing label
+        existing = conn.execute(
+            "SELECT label, updated_at FROM labels WHERE entry_type = ? AND entry_id = ?",
+            (entry_type, entry_id)
+        ).fetchone()
+
+        if existing:
+            # Newer wins
+            if lbl_updated_at > (existing["updated_at"] or ""):
+                conn.execute("""
+                    UPDATE labels SET label = ?, updated_at = ?
+                    WHERE entry_type = ? AND entry_id = ?
+                """, (label, lbl_updated_at, entry_type, entry_id))
+                updated += 1
+            else:
+                skipped += 1
+        else:
+            conn.execute("""
+                INSERT INTO labels (entry_type, entry_id, label, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (entry_type, entry_id, label,
+                  lbl.get("created_at", ""), lbl_updated_at))
+            imported += 1
+
+        # Upsert entry data if present
+        if lbl.get("title") is not None:
+            conn.execute("""
+                INSERT INTO entries (entry_type, entry_id, title, description, content,
+                                    link, author, published_date, source_name,
+                                    source_category, source_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(entry_type, entry_id) DO UPDATE SET
+                    title=excluded.title, description=excluded.description,
+                    content=excluded.content, link=excluded.link, author=excluded.author,
+                    published_date=excluded.published_date, source_name=excluded.source_name,
+                    source_category=excluded.source_category, source_type=excluded.source_type
+            """, (entry_type, entry_id, lbl.get("title", ""),
+                  lbl.get("description", ""), lbl.get("content", ""),
+                  lbl.get("link", ""), lbl.get("author", ""),
+                  lbl.get("published_date", ""), lbl.get("source_name", ""),
+                  lbl.get("source_category", ""), lbl.get("source_type", "")))
+
+    conn.commit()
+    conn.close()
+    return {"imported": imported, "skipped": skipped, "updated": updated}
 
 
 # Initialize on import
