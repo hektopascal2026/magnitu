@@ -390,60 +390,71 @@ def import_labels(labels_list: List[dict]) -> dict:
     skipped = 0
     updated = 0
 
-    for lbl in labels_list:
-        entry_type = lbl.get("entry_type", "")
-        entry_id = lbl.get("entry_id")
-        label = lbl.get("label", "")
-        lbl_updated_at = lbl.get("updated_at", "")
+    # Use explicit transaction for performance
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        # Pre-fetch all existing labels for fast lookup
+        existing_map = {}
+        for row in conn.execute("SELECT entry_type, entry_id, label, updated_at FROM labels"):
+            existing_map[(row["entry_type"], row["entry_id"])] = {
+                "label": row["label"], "updated_at": row["updated_at"] or ""
+            }
 
-        if not entry_type or not entry_id or not label:
-            skipped += 1
-            continue
+        for lbl in labels_list:
+            entry_type = lbl.get("entry_type", "")
+            entry_id = lbl.get("entry_id")
+            label = lbl.get("label", "")
+            lbl_updated_at = lbl.get("updated_at", "")
 
-        # Check existing label
-        existing = conn.execute(
-            "SELECT label, updated_at FROM labels WHERE entry_type = ? AND entry_id = ?",
-            (entry_type, entry_id)
-        ).fetchone()
-
-        if existing:
-            # Newer wins
-            if lbl_updated_at > (existing["updated_at"] or ""):
-                conn.execute("""
-                    UPDATE labels SET label = ?, updated_at = ?
-                    WHERE entry_type = ? AND entry_id = ?
-                """, (label, lbl_updated_at, entry_type, entry_id))
-                updated += 1
-            else:
+            if not entry_type or not entry_id or not label:
                 skipped += 1
-        else:
-            conn.execute("""
-                INSERT INTO labels (entry_type, entry_id, label, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-            """, (entry_type, entry_id, label,
-                  lbl.get("created_at", ""), lbl_updated_at))
-            imported += 1
+                continue
 
-        # Upsert entry data if present
-        if lbl.get("title") is not None:
-            conn.execute("""
-                INSERT INTO entries (entry_type, entry_id, title, description, content,
-                                    link, author, published_date, source_name,
-                                    source_category, source_type)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(entry_type, entry_id) DO UPDATE SET
-                    title=excluded.title, description=excluded.description,
-                    content=excluded.content, link=excluded.link, author=excluded.author,
-                    published_date=excluded.published_date, source_name=excluded.source_name,
-                    source_category=excluded.source_category, source_type=excluded.source_type
-            """, (entry_type, entry_id, lbl.get("title", ""),
-                  lbl.get("description", ""), lbl.get("content", ""),
-                  lbl.get("link", ""), lbl.get("author", ""),
-                  lbl.get("published_date", ""), lbl.get("source_name", ""),
-                  lbl.get("source_category", ""), lbl.get("source_type", "")))
+            key = (entry_type, entry_id)
+            existing = existing_map.get(key)
 
-    conn.commit()
-    conn.close()
+            if existing:
+                if lbl_updated_at > existing["updated_at"]:
+                    conn.execute("""
+                        UPDATE labels SET label = ?, updated_at = ?
+                        WHERE entry_type = ? AND entry_id = ?
+                    """, (label, lbl_updated_at, entry_type, entry_id))
+                    updated += 1
+                else:
+                    skipped += 1
+            else:
+                conn.execute("""
+                    INSERT INTO labels (entry_type, entry_id, label, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (entry_type, entry_id, label,
+                      lbl.get("created_at", ""), lbl_updated_at))
+                imported += 1
+
+            # Upsert entry data if present
+            if lbl.get("title") is not None:
+                conn.execute("""
+                    INSERT INTO entries (entry_type, entry_id, title, description, content,
+                                        link, author, published_date, source_name,
+                                        source_category, source_type)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(entry_type, entry_id) DO UPDATE SET
+                        title=excluded.title, description=excluded.description,
+                        content=excluded.content, link=excluded.link, author=excluded.author,
+                        published_date=excluded.published_date, source_name=excluded.source_name,
+                        source_category=excluded.source_category, source_type=excluded.source_type
+                """, (entry_type, entry_id, lbl.get("title", ""),
+                      lbl.get("description", ""), lbl.get("content", ""),
+                      lbl.get("link", ""), lbl.get("author", ""),
+                      lbl.get("published_date", ""), lbl.get("source_name", ""),
+                      lbl.get("source_category", ""), lbl.get("source_type", "")))
+
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
     return {"imported": imported, "skipped": skipped, "updated": updated}
 
 

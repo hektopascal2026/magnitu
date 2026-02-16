@@ -233,6 +233,7 @@ async def fork_model(request: Request):
 @app.post("/api/model/import")
 async def import_model_upload(request: Request):
     """Import a .magnitu file (multipart upload)."""
+    import asyncio
     import tempfile
     form = await request.form()
     upload = form.get("file")
@@ -246,9 +247,13 @@ async def import_model_upload(request: Request):
         tmp_path = tmp.name
 
     try:
-        result = model_manager.import_model(tmp_path)
+        # Run blocking import in a thread so it doesn't freeze the server
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, model_manager.import_model, tmp_path)
         return {"success": True, **result}
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return JSONResponse({"success": False, "error": str(e)}, status_code=400)
     finally:
         Path(tmp_path).unlink(missing_ok=True)

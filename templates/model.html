@@ -265,20 +265,35 @@
             formData.append('file', fileInput.files[0]);
 
             var status = document.getElementById('importStatus');
-            status.innerHTML = '<span class="message message-info" style="display:inline-block; padding:4px 10px;">Importing...</span>';
+            var btn = importForm.querySelector('button[type="submit"]');
+            btn.disabled = true;
+            btn.textContent = 'Importing...';
+            status.innerHTML = '<span class="message message-info" style="display:inline-block; padding:4px 10px;">Importing — this may take a moment...</span>';
 
             fetch('/api/model/import', { method: 'POST', body: formData })
-            .then(function(r) { return r.json(); })
+            .then(function(r) {
+                if (!r.ok) {
+                    return r.text().then(function(t) {
+                        try { var d = JSON.parse(t); throw new Error(d.detail || d.error || 'Server error ' + r.status); }
+                        catch(e) { if (e.message.indexOf('Server error') === 0) throw e; throw new Error('Server error ' + r.status); }
+                    });
+                }
+                return r.json();
+            })
             .then(function(d) {
                 if (d.success) {
                     status.innerHTML = '<span class="message message-success" style="display:inline-block; padding:4px 10px;">' + (d.message || 'Imported.') + '</span>';
                     setTimeout(function() { location.reload(); }, 2000);
                 } else {
                     status.innerHTML = '<span class="message message-error" style="display:inline-block; padding:4px 10px;">' + (d.error || 'Failed.') + '</span>';
+                    btn.disabled = false;
+                    btn.textContent = 'Import';
                 }
             })
             .catch(function(err) {
                 status.innerHTML = '<span class="message message-error" style="display:inline-block; padding:4px 10px;">Error: ' + err.message + '</span>';
+                btn.disabled = false;
+                btn.textContent = 'Import';
             });
         });
     }

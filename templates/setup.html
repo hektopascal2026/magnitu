@@ -84,20 +84,35 @@
         formData.append('file', fileInput.files[0]);
 
         var status = document.getElementById('setupStatus');
-        status.innerHTML = '<div class="message message-info">Importing model...</div>';
+        var btn = e.target.querySelector('button[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Importing...';
+        status.innerHTML = '<div class="message message-info">Importing model — this may take a moment...</div>';
 
         fetch('/api/model/import', { method: 'POST', body: formData })
-        .then(function(r) { return r.json(); })
+        .then(function(r) {
+            if (!r.ok) {
+                return r.text().then(function(t) {
+                    try { var d = JSON.parse(t); throw new Error(d.detail || d.error || 'Server error ' + r.status); }
+                    catch(e) { if (e.message.indexOf('Server error') === 0) throw e; throw new Error('Server error ' + r.status); }
+                });
+            }
+            return r.json();
+        })
         .then(function(d) {
             if (d.success) {
-                status.innerHTML = '<div class="message message-success">' + (d.message || 'Model loaded.') + '</div>';
+                status.innerHTML = '<div class="message message-success">' + (d.message || 'Model loaded.') + ' Redirecting...</div>';
                 setTimeout(function() { window.location.href = '/'; }, 1500);
             } else {
                 status.innerHTML = '<div class="message message-error">' + (d.error || 'Import failed.') + '</div>';
+                btn.disabled = false;
+                btn.textContent = 'Load Model';
             }
         })
         .catch(function(err) {
             status.innerHTML = '<div class="message message-error">Error: ' + err.message + '</div>';
+            btn.disabled = false;
+            btn.textContent = 'Load Model';
         });
     });
 })();
