@@ -272,6 +272,9 @@ def import_model(file_path: str) -> dict:
             "message": "",
         }
 
+        # Snapshot local state before import (used to decide whether to adopt identity)
+        pre_import_label_count = db.get_label_count()
+
         # Import labels
         labels_path = tmp_dir / "labels.json"
         if labels_path.exists():
@@ -334,9 +337,14 @@ def import_model(file_path: str) -> dict:
                 description=imported_description,
                 created_at=manifest.get("created_at", ""),
             )
-        else:
-            # Profile exists — keep it but note the import
-            pass
+        elif local_version == 0 and pre_import_label_count == 0:
+            # Profile exists but is empty (just created, no work done) — adopt imported identity
+            db.set_model_profile(
+                model_name=imported_name,
+                model_uuid=imported_uuid,
+                description=imported_description,
+                created_at=manifest.get("created_at", ""),
+            )
 
         # Build message
         new_labels = result["labels"]["imported"] + result["labels"]["updated"]
