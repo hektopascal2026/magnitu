@@ -429,6 +429,15 @@ async def train_model():
         result["recipe_version"] = recipe.get("version")
         result["recipe_quality"] = quality
         result["recipe_keywords"] = len(recipe.get("keywords", {}))
+    else:
+        arch = result.get("architecture", "tfidf")
+        if arch == "transformer":
+            result["recipe_note"] = (
+                "Recipe not generated yet. Knowledge distillation needs at least "
+                "20 entries to build a recipe. Sync more entries from Seismo, then retrain."
+            )
+        else:
+            result["recipe_note"] = "No recipe generated — model may not have enough data."
 
     return result
 
@@ -485,12 +494,22 @@ async def update_settings(request: Request):
     """Update configuration."""
     data = await request.json()
     config = get_config()
+    old_transformer_name = config.get("transformer_model_name", "")
+
     for key in ["seismo_url", "api_key", "min_labels_to_train",
                 "recipe_top_keywords", "auto_train_after_n_labels", "alert_threshold",
                 "model_architecture", "transformer_model_name"]:
         if key in data:
             config[key] = data[key]
     save_config(config)
+
+    # If the transformer model name changed, invalidate all cached embeddings
+    # and clear the in-memory model so the new one gets loaded on next use
+    new_transformer_name = config.get("transformer_model_name", "")
+    if new_transformer_name != old_transformer_name and old_transformer_name:
+        db.invalidate_all_embeddings()
+        pipeline.invalidate_embedder_cache()
+
     return {"success": True, "config": config}
 
 

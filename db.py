@@ -347,6 +347,14 @@ def get_all_reasoning_texts() -> List[dict]:
     return [dict(r) for r in rows]
 
 
+def invalidate_all_embeddings():
+    """Clear all cached embeddings (needed when transformer model changes)."""
+    conn = get_db()
+    conn.execute("UPDATE entries SET embedding = NULL")
+    conn.commit()
+    conn.close()
+
+
 # ─── Model operations ───
 
 def save_model_record(version: int, accuracy: float, f1: float, precision: float,

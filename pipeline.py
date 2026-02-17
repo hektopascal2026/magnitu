@@ -125,7 +125,20 @@ def embedding_to_bytes(embedding: np.ndarray) -> bytes:
 
 def bytes_to_embedding(data: bytes, dim: int = 768) -> np.ndarray:
     """Deserialize bytes back to a 1-D float32 embedding."""
-    return np.frombuffer(data, dtype=np.float32)
+    emb = np.frombuffer(data, dtype=np.float32)
+    if len(emb) != dim:
+        logger.warning(
+            "Embedding dimension mismatch: expected %d, got %d. "
+            "Stale embedding? Try recomputing embeddings from Settings.",
+            dim, len(emb)
+        )
+    return emb
+
+
+def invalidate_embedder_cache():
+    """Clear the cached transformer model (call when model name changes)."""
+    global _embedder
+    _embedder = None
 
 
 def embed_entries(entries: List[dict]) -> List[bytes]:
@@ -274,24 +287,29 @@ def _train_transformer() -> dict:
             "label_count": len(labeled),
         }
 
-    # Collect embeddings and labels
+    # Batch-fetch all embeddings in one query
     conn = db.get_db()
+    emb_map = {}
+    rows = conn.execute(
+        "SELECT entry_type, entry_id, embedding FROM entries WHERE embedding IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        emb_map[(row["entry_type"], row["entry_id"])] = row["embedding"]
+    conn.close()
+
     X_list = []
     y_list = []
     missing_embeddings = []
 
     for lbl in labeled:
-        row = conn.execute(
-            "SELECT embedding FROM entries WHERE entry_type = ? AND entry_id = ?",
-            (lbl["entry_type"], lbl["entry_id"])
-        ).fetchone()
-        if row and row["embedding"]:
-            emb = bytes_to_embedding(row["embedding"], embedding_dim)
+        key = (lbl["entry_type"], lbl["entry_id"])
+        emb_bytes = emb_map.get(key)
+        if emb_bytes:
+            emb = bytes_to_embedding(emb_bytes, embedding_dim)
             X_list.append(emb)
             y_list.append(lbl["label"])
         else:
             missing_embeddings.append(lbl)
-    conn.close()
 
     # Compute missing embeddings on the fly
     if missing_embeddings:
@@ -406,23 +424,28 @@ def _score_transformer(entries: List[dict], model_info: dict) -> List[dict]:
     config = get_config()
     embedding_dim = config.get("embedding_dim", 768)
 
-    # Gather embeddings — use cached where available, compute on the fly otherwise
+    # Batch-fetch all embeddings in one query
     conn = db.get_db()
+    emb_map = {}
+    rows = conn.execute(
+        "SELECT entry_type, entry_id, embedding FROM entries WHERE embedding IS NOT NULL"
+    ).fetchall()
+    for row in rows:
+        emb_map[(row["entry_type"], row["entry_id"])] = row["embedding"]
+    conn.close()
+
     embeddings = []
     to_compute = []
     to_compute_indices = []
 
     for i, entry in enumerate(entries):
-        row = conn.execute(
-            "SELECT embedding FROM entries WHERE entry_type = ? AND entry_id = ?",
-            (entry["entry_type"], entry["entry_id"])
-        ).fetchone()
-        if row and row["embedding"]:
-            embeddings.append((i, bytes_to_embedding(row["embedding"], embedding_dim)))
+        key = (entry["entry_type"], entry["entry_id"])
+        emb_bytes = emb_map.get(key)
+        if emb_bytes:
+            embeddings.append((i, bytes_to_embedding(emb_bytes, embedding_dim)))
         else:
             to_compute.append(entry)
             to_compute_indices.append(i)
-    conn.close()
 
     # Compute missing embeddings
     if to_compute:
