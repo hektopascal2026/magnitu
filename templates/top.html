@@ -3,15 +3,49 @@
 
 {% block content %}
 <div class="dashboard-section">
-    <h2>Top 30 Highest-Scored Entries</h2>
-    <p class="section-desc">These are the entries the model considers most relevant across all time. Compare the model's prediction against your labels to validate accuracy.</p>
+    <h2>Top 30</h2>
+
+    <!-- View Tabs -->
+    <div class="top-view-tabs">
+        <a href="/top?view=recent" class="top-view-tab {% if view == 'recent' %}active{% endif %}">Recent Unlabeled</a>
+        <a href="/top?view=mismatches" class="top-view-tab {% if view == 'mismatches' %}active{% endif %}">Mismatches</a>
+        <a href="/top?view=all" class="top-view-tab {% if view == 'all' %}active{% endif %}">All-time</a>
+    </div>
+
+    <!-- View Description -->
+    <p class="section-desc">
+        {% if view == 'recent' %}
+            Highest-scored entries from the last 7 days that you haven't labeled yet. Label these to validate the model on fresh data.
+            {% if total_recent is defined %}
+                <span class="top-view-meta">{{ total_recent }} recent entries, {{ total_recent_unlabeled }} unlabeled.</span>
+            {% endif %}
+        {% elif view == 'mismatches' %}
+            Entries where your label disagrees with the model's prediction. Correcting these has the highest impact on model improvement.
+            {% if total_mismatches is defined %}
+                <span class="top-view-meta">{{ total_mismatches }} mismatch{{ 'es' if total_mismatches != 1 else '' }} found.</span>
+            {% endif %}
+        {% else %}
+            The 30 highest-scored entries across all time. Compare the model's prediction against your labels to validate accuracy.
+        {% endif %}
+    </p>
 
     {% if not active_model %}
         <div class="empty-state"><p>No model trained yet. Train a model first to see scores.</p></div>
     {% elif not top_entries %}
-        <div class="empty-state"><p>No entries scored. Pull entries from Seismo first.</p></div>
+        <div class="empty-state">
+            <p>
+                {% if view == 'recent' %}
+                    No unlabeled entries from the last 7 days. Pull new entries from Seismo, or check the <a href="/top?view=all">all-time</a> view.
+                {% elif view == 'mismatches' %}
+                    No mismatches found — the model agrees with all your labels. Nice!
+                {% else %}
+                    No entries scored. Pull entries from Seismo first.
+                {% endif %}
+            </p>
+        </div>
     {% else %}
-        <!-- Accuracy Summary -->
+        <!-- Accuracy Summary (all-time view only) -->
+        {% if view == 'all' %}
         <div class="top-accuracy-summary">
             {% if accuracy is not none %}
                 <div class="stat-card">
@@ -28,13 +62,14 @@
                 <div class="stat-label">Have your label</div>
             </div>
         </div>
+        {% endif %}
 
         <!-- Entries -->
         <div class="entries-section">
             {% for item in top_entries %}
                 {% set e = item.entry %}
                 {% set s = item.score %}
-                <div class="entry-card {% if item.user_label %}labeled labeled-{{ item.user_label }}{% endif %}"
+                <div class="entry-card {% if item.user_label %}labeled labeled-{{ item.user_label }}{% endif %} {% if item.match == false %}mismatch{% endif %}"
                      data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" data-predicted="{{ s.predicted_label }}">
 
                     <!-- Header: source tag (lex only) left, rank|score box right -->
@@ -45,6 +80,13 @@
                                 {% if e.source_category %}
                                     <span class="entry-category">{{ e.source_category }}</span>
                                 {% endif %}
+                            {% endif %}
+                            {% if view == 'mismatches' %}
+                                <span class="mismatch-badge">
+                                    <span class="mismatch-yours">{{ item.user_label | replace('_', ' ') }}</span>
+                                    <span class="mismatch-arrow">&rarr;</span>
+                                    <span class="mismatch-model">{{ s.predicted_label | replace('_', ' ') }}</span>
+                                </span>
                             {% endif %}
                         </div>
                         <div class="top-rank-score">
@@ -70,7 +112,7 @@
                     <!-- Footer: reclassify+why left, source+date right -->
                     <div class="top-card-footer">
                         <div class="top-card-footer-left">
-                            <button class="btn-reclassify" title="Assign or change your label">Reclassify</button>
+                            <button class="btn-reclassify" title="Assign or change your label">{% if view == 'mismatches' %}Correct{% else %}Reclassify{% endif %}</button>
                             <button class="btn-why" data-entry-type="{{ e.entry_type }}" data-entry-id="{{ e.entry_id }}" title="Why did the model score this entry?">Why?</button>
                         </div>
                         <div class="top-card-footer-right">
@@ -110,6 +152,8 @@
 {% block scripts %}
 <script>
 (function() {
+    var currentView = '{{ view }}';
+
     document.addEventListener('click', function(e) {
         /* ── Reclassify toggle ── */
         var reclBtn = e.target.closest('.btn-reclassify');
@@ -192,12 +236,29 @@
                 card.className = card.className.replace(/labeled-\S+/g, '');
                 if (!card.classList.contains('labeled')) card.classList.add('labeled');
                 card.classList.add('labeled-' + label);
+
+                // In recent view, fade out labeled cards since they're "done"
+                if (currentView === 'recent') {
+                    card.style.opacity = '0.4';
+                    card.style.transition = 'opacity 0.3s';
+                }
+
+                // In mismatches view, check if the mismatch is resolved
+                if (currentView === 'mismatches' && label === predicted) {
+                    card.classList.remove('mismatch');
+                    card.style.opacity = '0.4';
+                    card.style.transition = 'opacity 0.3s';
+                    var badge = card.querySelector('.mismatch-badge');
+                    if (badge) badge.innerHTML = '<span style="color:#00aa00;font-weight:700;">Resolved</span>';
+                }
+
                 setTimeout(function() { panel.style.display = 'none'; }, 300);
                 updateAccuracy();
             });
     });
 
     function updateAccuracy() {
+        if (currentView !== 'all') return;
         var cards = document.querySelectorAll('.entries-section .entry-card');
         var labeled = 0, correct = 0;
         cards.forEach(function(c) {

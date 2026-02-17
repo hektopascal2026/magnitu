@@ -179,6 +179,31 @@ def get_all_entries() -> List[dict]:
     return [dict(r) for r in rows]
 
 
+def get_recent_entries(days: int = 7) -> List[dict]:
+    """Get entries published within the last N days."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT * FROM entries
+        WHERE published_date >= date('now', ?)
+        ORDER BY published_date DESC
+    """, (f"-{days} days",)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_labeled_entries() -> List[dict]:
+    """Get all entries that have a user label, with the label included."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT e.*, l.label as user_label
+        FROM entries e
+        JOIN labels l ON e.entry_type = l.entry_type AND e.entry_id = l.entry_id
+        ORDER BY e.published_date DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def get_entry_count() -> int:
     conn = get_db()
     count = conn.execute("SELECT COUNT(*) FROM entries").fetchone()[0]

@@ -99,42 +99,106 @@ async def dashboard_page(request: Request):
 
 
 @app.get("/top", response_class=HTMLResponse)
-async def top_page(request: Request):
-    """Top 30 highest-scored entries — validates model accuracy."""
+async def top_page(request: Request, view: str = "recent"):
+    """Top entries with multiple views for model validation and improvement."""
     ctx = _base_context(request)
-    
-    # Score all local entries with the active model
-    all_entries = db.get_all_entries()
-    scored = pipeline.score_entries(all_entries)
-    
-    # Sort by relevance score descending, take top 30
-    scored.sort(key=lambda s: s["relevance_score"], reverse=True)
-    top_scored = scored[:30]
-    
-    # Enrich with entry data and user labels
-    top_entries = []
-    for s in top_scored:
-        # Find the full entry
-        entry = next((e for e in all_entries 
-                       if e["entry_type"] == s["entry_type"] and e["entry_id"] == s["entry_id"]), None)
-        if not entry:
-            continue
-        user_label = db.get_label(s["entry_type"], s["entry_id"])
-        top_entries.append({
-            "entry": entry,
-            "score": s,
-            "user_label": user_label,
-            "match": user_label == s["predicted_label"] if user_label else None,
-        })
-    
-    # Accuracy on labeled subset
-    labeled_in_top = [e for e in top_entries if e["user_label"] is not None]
-    correct = sum(1 for e in labeled_in_top if e["match"])
-    ctx["top_entries"] = top_entries
-    ctx["labeled_count"] = len(labeled_in_top)
-    ctx["correct_count"] = correct
-    ctx["accuracy"] = round(correct / len(labeled_in_top) * 100, 1) if labeled_in_top else None
-    
+
+    # Validate view parameter
+    if view not in ("recent", "mismatches", "all"):
+        view = "recent"
+    ctx["view"] = view
+
+    if view == "recent":
+        # Recent unlabeled top 30: highest-scored entries from last 7 days, unlabeled only
+        entries = db.get_recent_entries(days=7)
+        scored = pipeline.score_entries(entries)
+        # Build a lookup for quick label checks (batch query)
+        all_labels = {(l["entry_type"], l["entry_id"]) for l in db.get_all_labels_raw()}
+        labeled_ids = set()
+        for e in entries:
+            if (e["entry_type"], e["entry_id"]) in all_labels:
+                labeled_ids.add((e["entry_type"], e["entry_id"]))
+        # Filter to unlabeled, sort by score
+        unlabeled_scored = [s for s in scored
+                           if (s["entry_type"], s["entry_id"]) not in labeled_ids]
+        unlabeled_scored.sort(key=lambda s: s["relevance_score"], reverse=True)
+        top_scored = unlabeled_scored[:30]
+        # Build entry map for fast lookup
+        entry_map = {(e["entry_type"], e["entry_id"]): e for e in entries}
+        top_entries = []
+        for s in top_scored:
+            entry = entry_map.get((s["entry_type"], s["entry_id"]))
+            if not entry:
+                continue
+            top_entries.append({
+                "entry": entry,
+                "score": s,
+                "user_label": None,
+                "match": None,
+            })
+        ctx["top_entries"] = top_entries
+        ctx["labeled_count"] = 0
+        ctx["correct_count"] = 0
+        ctx["accuracy"] = None
+        ctx["total_recent"] = len(entries)
+        ctx["total_recent_unlabeled"] = len(unlabeled_scored)
+
+    elif view == "mismatches":
+        # Mismatches: entries where user label != model prediction
+        labeled_entries = db.get_labeled_entries()
+        scored = pipeline.score_entries(labeled_entries)
+        # Build score lookup
+        score_map = {(s["entry_type"], s["entry_id"]): s for s in scored}
+        top_entries = []
+        for entry in labeled_entries:
+            key = (entry["entry_type"], entry["entry_id"])
+            s = score_map.get(key)
+            if not s:
+                continue
+            user_label = entry["user_label"]
+            predicted = s["predicted_label"]
+            if user_label != predicted:
+                top_entries.append({
+                    "entry": entry,
+                    "score": s,
+                    "user_label": user_label,
+                    "match": False,
+                })
+        # Sort by score descending (high-impact mismatches first)
+        top_entries.sort(key=lambda x: x["score"]["relevance_score"], reverse=True)
+        top_entries = top_entries[:30]
+        ctx["top_entries"] = top_entries
+        ctx["labeled_count"] = len(top_entries)
+        ctx["correct_count"] = 0
+        ctx["accuracy"] = None
+        ctx["total_mismatches"] = len(top_entries)
+
+    else:
+        # All-time top 30 (original behavior)
+        all_entries = db.get_all_entries()
+        scored = pipeline.score_entries(all_entries)
+        scored.sort(key=lambda s: s["relevance_score"], reverse=True)
+        top_scored = scored[:30]
+        entry_map = {(e["entry_type"], e["entry_id"]): e for e in all_entries}
+        top_entries = []
+        for s in top_scored:
+            entry = entry_map.get((s["entry_type"], s["entry_id"]))
+            if not entry:
+                continue
+            user_label = db.get_label(s["entry_type"], s["entry_id"])
+            top_entries.append({
+                "entry": entry,
+                "score": s,
+                "user_label": user_label,
+                "match": user_label == s["predicted_label"] if user_label else None,
+            })
+        labeled_in_top = [e for e in top_entries if e["user_label"] is not None]
+        correct = sum(1 for e in labeled_in_top if e["match"])
+        ctx["top_entries"] = top_entries
+        ctx["labeled_count"] = len(labeled_in_top)
+        ctx["correct_count"] = correct
+        ctx["accuracy"] = round(correct / len(labeled_in_top) * 100, 1) if labeled_in_top else None
+
     return templates.TemplateResponse("top.html", ctx)
 
 
