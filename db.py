@@ -19,6 +19,29 @@ def get_db() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_db(conn: sqlite3.Connection):
+    """Run migrations for Magnitu 2 schema additions."""
+    cursor = conn.execute("PRAGMA table_info(entries)")
+    entry_cols = {row[1] for row in cursor.fetchall()}
+
+    if "embedding" not in entry_cols:
+        conn.execute("ALTER TABLE entries ADD COLUMN embedding BLOB DEFAULT NULL")
+
+    cursor = conn.execute("PRAGMA table_info(labels)")
+    label_cols = {row[1] for row in cursor.fetchall()}
+
+    if "reasoning" not in label_cols:
+        conn.execute("ALTER TABLE labels ADD COLUMN reasoning TEXT DEFAULT ''")
+
+    cursor = conn.execute("PRAGMA table_info(models)")
+    model_cols = {row[1] for row in cursor.fetchall()}
+
+    if "architecture" not in model_cols:
+        conn.execute("ALTER TABLE models ADD COLUMN architecture TEXT DEFAULT 'tfidf'")
+
+    conn.commit()
+
+
 def init_db():
     """Create all tables if they don't exist."""
     conn = get_db()
@@ -36,6 +59,7 @@ def init_db():
             source_name TEXT DEFAULT '',
             source_category TEXT DEFAULT '',
             source_type TEXT DEFAULT '',      -- 'rss', 'substack', 'email', 'lex_eu', 'lex_ch'
+            embedding BLOB DEFAULT NULL,     -- cached transformer embedding (Magnitu 2)
             fetched_at TEXT DEFAULT (datetime('now')),
             UNIQUE(entry_type, entry_id)
         );
@@ -45,6 +69,7 @@ def init_db():
             entry_type TEXT NOT NULL,
             entry_id INTEGER NOT NULL,
             label TEXT NOT NULL,             -- 'investigation_lead', 'important', 'background', 'noise'
+            reasoning TEXT DEFAULT '',       -- optional free-text explanation (Magnitu 2)
             created_at TEXT DEFAULT (datetime('now')),
             updated_at TEXT DEFAULT (datetime('now')),
             UNIQUE(entry_type, entry_id)
@@ -63,6 +88,7 @@ def init_db():
             model_path TEXT DEFAULT '',
             recipe_path TEXT DEFAULT '',
             recipe_quality REAL DEFAULT 0.0,        -- how well recipe approximates full model
+            architecture TEXT DEFAULT 'tfidf',      -- 'tfidf' or 'transformer' (Magnitu 2)
             trained_at TEXT DEFAULT (datetime('now')),
             is_active INTEGER DEFAULT 0
         );
@@ -88,6 +114,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_labels_label ON labels(label);
         CREATE INDEX IF NOT EXISTS idx_models_active ON models(is_active);
     """)
+    _migrate_db(conn)
     conn.commit()
     conn.close()
 
@@ -161,15 +188,15 @@ def get_entry_count() -> int:
 
 # ─── Label operations ───
 
-def set_label(entry_type: str, entry_id: int, label: str):
-    """Set or update a label for an entry."""
+def set_label(entry_type: str, entry_id: int, label: str, reasoning: str = ""):
+    """Set or update a label for an entry, with optional reasoning text."""
     conn = get_db()
     conn.execute("""
-        INSERT INTO labels (entry_type, entry_id, label)
-        VALUES (?, ?, ?)
+        INSERT INTO labels (entry_type, entry_id, label, reasoning)
+        VALUES (?, ?, ?, ?)
         ON CONFLICT(entry_type, entry_id) DO UPDATE SET
-            label=excluded.label, updated_at=datetime('now')
-    """, (entry_type, entry_id, label))
+            label=excluded.label, reasoning=excluded.reasoning, updated_at=datetime('now')
+    """, (entry_type, entry_id, label, reasoning))
     conn.commit()
     conn.close()
 
@@ -193,11 +220,24 @@ def get_label(entry_type: str, entry_id: int) -> Optional[str]:
     return row["label"] if row else None
 
 
+def get_label_with_reasoning(entry_type: str, entry_id: int) -> Optional[dict]:
+    """Get label and reasoning for a specific entry."""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT label, reasoning FROM labels WHERE entry_type = ? AND entry_id = ?",
+        (entry_type, entry_id)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"label": row["label"], "reasoning": row["reasoning"] or ""}
+
+
 def get_all_labels() -> List[dict]:
     """Get all labels with entry data."""
     conn = get_db()
     rows = conn.execute("""
-        SELECT l.entry_type, l.entry_id, l.label, l.created_at, l.updated_at,
+        SELECT l.entry_type, l.entry_id, l.label, l.reasoning, l.created_at, l.updated_at,
                e.title, e.description, e.content, e.source_type, e.source_name, e.source_category
         FROM labels l
         JOIN entries e ON l.entry_type = e.entry_type AND l.entry_id = e.entry_id
@@ -211,7 +251,7 @@ def get_all_labels_raw() -> List[dict]:
     """Get all labels without joining entries (for syncing)."""
     conn = get_db()
     rows = conn.execute("""
-        SELECT entry_type, entry_id, label, created_at, updated_at
+        SELECT entry_type, entry_id, label, reasoning, created_at, updated_at
         FROM labels
         ORDER BY updated_at DESC
     """).fetchall()
@@ -251,6 +291,60 @@ def get_labels_since_model(model_version: int) -> int:
         ).fetchone()[0]
     conn.close()
     return count
+
+
+# ─── Embedding operations (Magnitu 2) ───
+
+def store_embedding(entry_type: str, entry_id: int, embedding_bytes: bytes):
+    """Store a precomputed embedding for an entry."""
+    conn = get_db()
+    conn.execute("""
+        UPDATE entries SET embedding = ? WHERE entry_type = ? AND entry_id = ?
+    """, (embedding_bytes, entry_type, entry_id))
+    conn.commit()
+    conn.close()
+
+
+def store_embeddings_batch(updates: List[tuple]):
+    """Batch store embeddings. Each tuple: (embedding_bytes, entry_type, entry_id)."""
+    conn = get_db()
+    conn.executemany("""
+        UPDATE entries SET embedding = ? WHERE entry_type = ? AND entry_id = ?
+    """, updates)
+    conn.commit()
+    conn.close()
+
+
+def get_entries_without_embeddings(limit: int = 500) -> List[dict]:
+    """Get entries that don't have embeddings yet."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT * FROM entries WHERE embedding IS NULL
+        ORDER BY published_date DESC LIMIT ?
+    """, (limit,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_embedding_count() -> int:
+    """Count entries that have embeddings."""
+    conn = get_db()
+    count = conn.execute("SELECT COUNT(*) FROM entries WHERE embedding IS NOT NULL").fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_all_reasoning_texts() -> List[dict]:
+    """Get all labels that have reasoning text, for recipe boosting."""
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT entry_type, entry_id, label, reasoning
+        FROM labels
+        WHERE reasoning IS NOT NULL AND reasoning != ''
+        ORDER BY updated_at DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 # ─── Model operations ───
@@ -370,7 +464,7 @@ def export_labels() -> List[dict]:
     Returns list of dicts with label + entry data needed for retraining."""
     conn = get_db()
     rows = conn.execute("""
-        SELECT l.entry_type, l.entry_id, l.label, l.created_at, l.updated_at,
+        SELECT l.entry_type, l.entry_id, l.label, l.reasoning, l.created_at, l.updated_at,
                e.title, e.description, e.content, e.link, e.author,
                e.published_date, e.source_name, e.source_category, e.source_type
         FROM labels l
@@ -413,20 +507,22 @@ def import_labels(labels_list: List[dict]) -> dict:
             key = (entry_type, entry_id)
             existing = existing_map.get(key)
 
+            reasoning = lbl.get("reasoning", "")
+
             if existing:
                 if lbl_updated_at > existing["updated_at"]:
                     conn.execute("""
-                        UPDATE labels SET label = ?, updated_at = ?
+                        UPDATE labels SET label = ?, reasoning = ?, updated_at = ?
                         WHERE entry_type = ? AND entry_id = ?
-                    """, (label, lbl_updated_at, entry_type, entry_id))
+                    """, (label, reasoning, lbl_updated_at, entry_type, entry_id))
                     updated += 1
                 else:
                     skipped += 1
             else:
                 conn.execute("""
-                    INSERT INTO labels (entry_type, entry_id, label, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (entry_type, entry_id, label,
+                    INSERT INTO labels (entry_type, entry_id, label, reasoning, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (entry_type, entry_id, label, reasoning,
                       lbl.get("created_at", ""), lbl_updated_at))
                 imported += 1
 
