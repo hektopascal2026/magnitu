@@ -71,7 +71,11 @@ def push_scores(scores: list[dict], model_version: int, model_meta: dict = None)
     """
     Push batch of scores to Seismo.
     Each score: {entry_type, entry_id, relevance_score, predicted_label, explanation}
-    model_meta: optional {model_name, model_description, model_version, model_trained_at}
+    model_meta: {model_name, model_description, model_version, model_trained_at,
+                  accuracy, f1_score, label_count, architecture, model_uuid}
+
+    Seismo can use the accuracy/f1/label_count fields to decide whether to
+    accept scores from this model or keep scores from a better one.
     """
     payload = {
         "scores": scores,
@@ -81,7 +85,7 @@ def push_scores(scores: list[dict], model_version: int, model_meta: dict = None)
         payload["model_meta"] = model_meta
 
     result = _request("POST", {"action": "magnitu_scores"}, json=payload).json()
-    db.log_sync("push", len(scores), f"scores pushed, model v{model_version}")
+    db.log_sync("push", len(scores), "scores pushed, model v{}".format(model_version))
     return result
 
 
@@ -93,9 +97,34 @@ def push_recipe(recipe: dict) -> dict:
 
 
 def push_labels() -> dict:
-    """Push all local labels to Seismo so other instances can pull them."""
+    """
+    Push local labels to Seismo so other instances can pull them.
+
+    Only pushes labels that were updated since the last label push, to avoid
+    constantly overwriting another user's more recent labels.
+    """
+    # Find the timestamp of our last label push
+    conn = db.get_db()
+    row = conn.execute("""
+        SELECT synced_at FROM sync_log
+        WHERE direction = 'push' AND details LIKE '%labels pushed%'
+        ORDER BY synced_at DESC LIMIT 1
+    """).fetchone()
+    conn.close()
+
+    last_push_time = row["synced_at"] if row else ""
+
+    # Get labels updated since last push
     all_labels = db.get_all_labels_raw()
-    if not all_labels:
+    if last_push_time:
+        labels_to_push = [
+            lbl for lbl in all_labels
+            if (lbl.get("updated_at") or "") > last_push_time
+        ]
+    else:
+        labels_to_push = all_labels
+
+    if not labels_to_push:
         return {"success": True, "pushed": 0}
 
     payload = {
@@ -107,37 +136,74 @@ def push_labels() -> dict:
                 "reasoning": lbl.get("reasoning", ""),
                 "labeled_at": lbl.get("updated_at") or lbl.get("created_at", ""),
             }
-            for lbl in all_labels
+            for lbl in labels_to_push
         ]
     }
 
     result = _request("POST", {"action": "magnitu_labels"}, json=payload).json()
-    db.log_sync("push", len(all_labels), "labels pushed")
+    db.log_sync("push", len(labels_to_push), "labels pushed")
     return result
 
 
 def pull_labels() -> int:
-    """Pull labels from Seismo and merge into local database. Returns count imported."""
+    """
+    Pull labels from Seismo and merge into local database.
+
+    Conflict resolution: if both local and remote have a label for the same
+    entry, the newer timestamp wins.  This means two users labeling the same
+    entry will converge to whichever label was applied last — and the next
+    sync cycle propagates that to the other instance.
+
+    Returns count of labels imported or updated.
+    """
     data = _request("GET", {"action": "magnitu_labels"}).json()
     labels = data.get("labels", [])
 
     imported = 0
+    updated = 0
+    conflicts = 0
+
     for lbl in labels:
         entry_type = lbl.get("entry_type", "")
         entry_id = int(lbl.get("entry_id", 0))
         label = lbl.get("label", "")
+        reasoning = lbl.get("reasoning", "")
+        remote_time = lbl.get("labeled_at", "")
         if not entry_type or not entry_id or not label:
             continue
 
-        # Only import if we don't already have a label for this entry
-        existing = db.get_label(entry_type, entry_id)
-        if existing is None:
-            db.set_label(entry_type, entry_id, label)
-            imported += 1
+        # Check if we already have a label for this entry
+        conn = db.get_db()
+        row = conn.execute(
+            "SELECT label, reasoning, updated_at FROM labels WHERE entry_type = ? AND entry_id = ?",
+            (entry_type, entry_id)
+        ).fetchone()
+        conn.close()
 
-    if imported:
-        db.log_sync("pull", imported, "labels pulled from Seismo")
-    return imported
+        if row is None:
+            # No local label — import
+            db.set_label(entry_type, entry_id, label, reasoning=reasoning)
+            imported += 1
+        else:
+            local_time = row["updated_at"] or ""
+            local_label = row["label"]
+
+            if local_label != label:
+                conflicts += 1
+
+            # Remote is newer — update local
+            if remote_time > local_time:
+                db.set_label(entry_type, entry_id, label, reasoning=reasoning)
+                updated += 1
+
+    total = imported + updated
+    if total:
+        details = "labels pulled: {} new, {} updated".format(imported, updated)
+        if conflicts:
+            details += ", {} conflicts (resolved by timestamp)".format(conflicts)
+        db.log_sync("pull", total, details)
+
+    return total
 
 
 def get_status() -> dict:

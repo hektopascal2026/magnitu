@@ -309,15 +309,21 @@ async def sync_pull():
         loop = asyncio.get_event_loop()
         count = await loop.run_in_executor(None, sync.pull_entries)
         # Also pull labels so new instances get existing training data
-        labels_imported = 0
+        labels_synced = 0
         try:
-            labels_imported = await loop.run_in_executor(None, sync.pull_labels)
+            labels_synced = await loop.run_in_executor(None, sync.pull_labels)
         except Exception:
             pass  # Seismo might not have the labels endpoint yet
+
+        # Check recent sync log for conflict details
+        syncs = db.get_recent_syncs(1)
+        sync_detail = syncs[0]["details"] if syncs else ""
+
         return {
             "success": True,
             "entries_fetched": count,
-            "labels_imported": labels_imported,
+            "labels_synced": labels_synced,
+            "sync_detail": sync_detail,
             "embeddings": db.get_embedding_count(),
         }
     except Exception as e:
@@ -348,15 +354,21 @@ async def sync_push():
                 "prediction": exp["prediction"],
             }
 
-    # Build model metadata for Seismo
+    # Build model metadata for Seismo — includes quality metrics so Seismo
+    # can gate whether to accept scores from a weaker model
     profile = model_manager.get_profile()
     model_meta = None
     if profile:
         model_meta = {
             "model_name": profile.get("model_name", ""),
+            "model_uuid": profile.get("model_uuid", ""),
             "model_description": profile.get("description", ""),
             "model_version": model_info["version"],
             "model_trained_at": model_info.get("trained_at", ""),
+            "accuracy": model_info.get("accuracy", 0.0),
+            "f1_score": model_info.get("f1_score", 0.0),
+            "label_count": model_info.get("label_count", 0),
+            "architecture": model_info.get("architecture", "tfidf"),
         }
 
     # Push scores

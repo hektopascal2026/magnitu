@@ -337,7 +337,14 @@
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.success) {
-                    flash('Fetched ' + data.entries_fetched + ' entries from Seismo.', 'success');
+                    var msg = 'Fetched ' + data.entries_fetched + ' entries';
+                    if (data.labels_synced > 0) {
+                        msg += ', ' + data.labels_synced + ' labels synced';
+                    }
+                    if (data.sync_detail && data.sync_detail.indexOf('conflict') > -1) {
+                        msg += ' (some label conflicts resolved by timestamp)';
+                    }
+                    flash(msg + '.', 'success');
                     setTimeout(function() { location.reload(); }, 1000);
                 } else {
                     flash('Sync failed: ' + (data.detail || 'Unknown error'), 'error');
