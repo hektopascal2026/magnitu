@@ -190,7 +190,6 @@ def build_tfidf_pipeline() -> Pipeline:
             class_weight="balanced",
             max_iter=1000,
             solver="lbfgs",
-            multi_class="multinomial",
             random_state=42,
         )),
     ])
@@ -337,7 +336,6 @@ def _train_transformer() -> dict:
         class_weight="balanced",
         max_iter=1000,
         solver="lbfgs",
-        multi_class="multinomial",
         random_state=42,
     )
     clf.fit(X_train, y_train)
