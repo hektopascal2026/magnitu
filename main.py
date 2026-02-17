@@ -166,12 +166,13 @@ async def top_page(request: Request, view: str = "recent"):
                 })
         # Sort by score descending (high-impact mismatches first)
         top_entries.sort(key=lambda x: x["score"]["relevance_score"], reverse=True)
+        total_mismatches = len(top_entries)
         top_entries = top_entries[:30]
         ctx["top_entries"] = top_entries
         ctx["labeled_count"] = len(top_entries)
         ctx["correct_count"] = 0
         ctx["accuracy"] = None
-        ctx["total_mismatches"] = len(top_entries)
+        ctx["total_mismatches"] = total_mismatches
 
     else:
         # All-time top 30 (original behavior)
