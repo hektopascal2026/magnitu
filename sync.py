@@ -56,13 +56,16 @@ def _compute_pending_embeddings():
 
     logger.info("Computing embeddings for %d entries...", len(unembedded))
     try:
-        from pipeline import embed_entries
+        from pipeline import embed_entries, release_embedder
         emb_bytes_list = embed_entries(unembedded)
         updates = []
         for entry, emb_bytes in zip(unembedded, emb_bytes_list):
             updates.append((emb_bytes, entry["entry_type"], entry["entry_id"]))
         db.store_embeddings_batch(updates)
         logger.info("Stored %d embeddings.", len(updates))
+
+        # Free the transformer from memory — it's not needed until next sync
+        release_embedder()
     except Exception as e:
         logger.warning("Failed to compute embeddings: %s", e)
 

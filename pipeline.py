@@ -67,28 +67,40 @@ def _get_embedder():
 
     logger.info("Loading transformer model: %s", model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModel.from_pretrained(model_name)
+
+    # Load in float16 to halve memory usage (~165MB instead of ~330MB)
+    model = AutoModel.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+    )
     model.eval()
 
-    # Select device: MPS > CUDA > CPU
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-
-    model = model.to(device)
-    logger.info("Transformer on device: %s", device)
+    # Stay on CPU — MPS copies the model to GPU RAM *and* keeps it in
+    # system RAM, doubling the footprint on memory-constrained Macs.
+    device = torch.device("cpu")
+    logger.info("Transformer loaded on CPU (float16, ~165MB)")
 
     _embedder = {"tokenizer": tokenizer, "model": model, "device": device}
     return _embedder
 
 
-def compute_embeddings(texts: List[str], batch_size: int = 32) -> np.ndarray:
+def release_embedder():
+    """Unload the transformer model to free memory after batch operations."""
+    global _embedder
+    if _embedder is not None:
+        import gc
+        del _embedder
+        _embedder = None
+        gc.collect()
+        logger.info("Transformer model released from memory.")
+
+
+def compute_embeddings(texts: List[str], batch_size: int = 8) -> np.ndarray:
     """
     Compute [CLS] embeddings for a list of texts using the transformer.
     Returns ndarray of shape (len(texts), embedding_dim).
+    Batch size kept small (8) and max_length capped at 256 to limit memory.
     """
     import torch
 
@@ -104,15 +116,15 @@ def compute_embeddings(texts: List[str], batch_size: int = 32) -> np.ndarray:
             batch_texts,
             padding=True,
             truncation=True,
-            max_length=512,
+            max_length=256,
             return_tensors="pt",
         ).to(device)
 
         with torch.no_grad():
             outputs = model(**encoded)
 
-        # Use [CLS] token embedding (first token)
-        cls_embeddings = outputs.last_hidden_state[:, 0, :].cpu().numpy()
+        # Use [CLS] token embedding (first token), convert back to float32
+        cls_embeddings = outputs.last_hidden_state[:, 0, :].float().cpu().numpy()
         all_embeddings.append(cls_embeddings)
 
     return np.vstack(all_embeddings) if all_embeddings else np.array([])
