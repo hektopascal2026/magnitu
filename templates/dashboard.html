@@ -25,13 +25,27 @@
             </div>
             <div class="stat-card">
                 <div class="stat-value">{{ active_model.feature_count }}</div>
-                <div class="stat-label">Features</div>
+                <div class="stat-label">{% if active_model.architecture == 'transformer' %}Embedding Dim{% else %}Features{% endif %}</div>
             </div>
             <div class="stat-card">
-                <div class="stat-value">{{ active_model.trained_at[:10] if active_model.trained_at else 'N/A' }}</div>
-                <div class="stat-label">Trained</div>
+                <div class="stat-value">
+                    {% if active_model.architecture == 'transformer' %}
+                        <span class="arch-badge arch-transformer" style="font-size: 12px;">transformer</span>
+                    {% else %}
+                        <span class="arch-badge arch-tfidf" style="font-size: 12px;">tf-idf</span>
+                    {% endif %}
+                </div>
+                <div class="stat-label">Architecture</div>
             </div>
         </div>
+        {% if architecture == 'transformer' %}
+        <div style="margin-top: 12px; font-size: 12px; color: #666;">
+            Embeddings: {{ embedding_count }} / {{ entry_count }} entries
+            {% if embedding_count < entry_count %}
+                — <button class="btn" style="padding: 2px 8px; font-size: 11px;" id="computeEmbBtn">Compute missing</button>
+            {% endif %}
+        </div>
+        {% endif %}
     {% else %}
         <div class="empty-state">
             <p>No model trained yet. Label at least {{ config.min_labels_to_train or 20 }} entries, then train.</p>
@@ -145,4 +159,35 @@
         <div class="empty-state"><p>No syncs yet.</p></div>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var embBtn = document.getElementById('computeEmbBtn');
+    if (embBtn) {
+        embBtn.addEventListener('click', function() {
+            embBtn.disabled = true;
+            embBtn.textContent = 'Computing...';
+            fetch('/api/embeddings/compute', { method: 'POST' })
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.success) {
+                    flash('Embeddings computed: ' + data.embedding_count + '/' + data.entry_count, 'success');
+                    setTimeout(function() { location.reload(); }, 1500);
+                } else {
+                    flash(data.error || 'Failed.', 'error');
+                    embBtn.disabled = false;
+                    embBtn.textContent = 'Compute missing';
+                }
+            })
+            .catch(function(err) {
+                flash('Error: ' + err.message, 'error');
+                embBtn.disabled = false;
+                embBtn.textContent = 'Compute missing';
+            });
+        });
+    }
+})();
+</script>
 {% endblock %}

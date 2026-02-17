@@ -12,7 +12,7 @@ URL="http://$HOST:$PORT"
 clear 2>/dev/null || true
 echo ""
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "   Magnitu"
+echo "   Magnitu 2"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 

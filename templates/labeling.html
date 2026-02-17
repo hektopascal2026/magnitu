@@ -114,6 +114,14 @@
                     <div class="entry-source">{{ entry.source_name }}</div>
                 {% endif %}
 
+                <div class="reasoning-row">
+                    <input type="text" class="reasoning-input"
+                           placeholder="{% if entry._label == 'investigation_lead' %}Why is this relevant?{% else %}Optional: why this label?{% endif %}"
+                           value="{{ entry._reasoning or '' }}"
+                           data-entry-type="{{ entry.entry_type }}"
+                           data-entry-id="{{ entry.entry_id }}"
+                           title="Optional reasoning (key: r to focus)">
+                </div>
                 <div class="label-buttons">
                     <button class="label-btn label-btn-investigation {% if entry._label == 'investigation_lead' %}active{% endif %}"
                             data-label="investigation_lead"
@@ -207,10 +215,15 @@
         var entryId = card.dataset.entryId;
         var wasLabeled = card.classList.contains('labeled');
 
+        // Get reasoning text from the input field
+        var reasoningInput = card.querySelector('.reasoning-input');
+        var reasoning = reasoningInput ? reasoningInput.value.trim() : '';
+
         var formData = new FormData();
         formData.append('entry_type', entryType);
         formData.append('entry_id', entryId);
         formData.append('label', label);
+        formData.append('reasoning', reasoning);
 
         fetch('/api/label', { method: 'POST', body: formData })
             .then(function(r) { return r.json(); })
@@ -262,7 +275,15 @@
 
     // Keyboard shortcuts
     document.addEventListener('keydown', function(e) {
-        // Don't capture if typing in an input
+        // If in reasoning input, only handle Escape (to blur) and Enter (to submit)
+        if (e.target.classList.contains('reasoning-input')) {
+            if (e.key === 'Escape') {
+                e.target.blur();
+                e.preventDefault();
+            }
+            return;
+        }
+        // Don't capture if typing in other inputs
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
         var labelMap = { '1': 'investigation_lead', '2': 'important', '3': 'background', '4': 'noise' };
@@ -270,6 +291,11 @@
         if (labelMap[e.key] && focusedCard) {
             e.preventDefault();
             labelEntry(focusedCard, labelMap[e.key]);
+        } else if (e.key === 'r' && focusedCard) {
+            // Focus the reasoning input of the current card
+            e.preventDefault();
+            var input = focusedCard.querySelector('.reasoning-input');
+            if (input) input.focus();
         } else if (e.key === 'ArrowDown' || e.key === 'j') {
             e.preventDefault();
             nextCard();

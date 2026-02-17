@@ -28,6 +28,33 @@
         </div>
     </div>
 
+    <!-- Model Architecture -->
+    <div class="dashboard-section">
+        <h2>Model Architecture</h2>
+        <div class="settings-form" id="archForm">
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label>Architecture</label>
+                    <select id="modelArch" style="padding: 10px 14px; border: 2px solid #000000; font-size: 14px; font-family: inherit; background: #ffffff; color: #000000;">
+                        <option value="transformer" {% if config.model_architecture == 'transformer' %}selected{% endif %}>Transformer (DistilRoBERTa) — recommended</option>
+                        <option value="tfidf" {% if config.model_architecture == 'tfidf' %}selected{% endif %}>TF-IDF + LogReg (Magnitu 1 fallback)</option>
+                    </select>
+                    <div class="form-help">Transformer uses a pre-trained language model for better understanding. TF-IDF uses keyword counting (faster, simpler).</div>
+                </div>
+                <div class="form-group">
+                    <label>Transformer Model</label>
+                    <input type="text" id="transformerModel" value="{{ config.transformer_model_name or 'distilroberta-base' }}"
+                           style="font-family: monospace;">
+                    <div class="form-help">HuggingFace model name. Default: distilroberta-base. Change only if you know what you're doing.</div>
+                </div>
+            </div>
+            <div class="form-actions">
+                <button class="btn btn-primary" id="saveArchBtn">Save Architecture</button>
+                <span style="font-size: 12px; color: #666;">Changing architecture requires retraining.</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Training Settings -->
     <div class="dashboard-section">
         <h2>Training Settings</h2>
@@ -63,6 +90,8 @@
             <div class="shortcut"><kbd>2</kbd> Important</div>
             <div class="shortcut"><kbd>3</kbd> Background</div>
             <div class="shortcut"><kbd>4</kbd> Noise</div>
+            <div class="shortcut"><kbd>r</kbd> Focus reasoning field</div>
+            <div class="shortcut"><kbd>Esc</kbd> Exit reasoning field</div>
             <div class="shortcut"><kbd>j</kbd> / <kbd>↓</kbd> Next entry</div>
             <div class="shortcut"><kbd>k</kbd> / <kbd>↑</kbd> Previous entry</div>
             <div class="shortcut"><kbd>u</kbd> Undo label</div>
@@ -119,6 +148,25 @@
             status.textContent = 'Error: ' + err.message;
             status.className = 'status-error';
         });
+    });
+
+    // Save architecture settings
+    document.getElementById('saveArchBtn').addEventListener('click', function() {
+        var data = {
+            model_architecture: document.getElementById('modelArch').value,
+            transformer_model_name: document.getElementById('transformerModel').value.trim(),
+        };
+        fetch('/api/settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(data),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(d) {
+            if (d.success) flash('Architecture saved. Retrain your model to apply changes.', 'success');
+            else flash('Failed to save.', 'error');
+        })
+        .catch(function(err) { flash('Error: ' + err.message, 'error'); });
     });
 
     // Save training settings

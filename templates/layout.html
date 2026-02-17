@@ -20,6 +20,11 @@
                     {% else %}
                         {{ label_count }} labels &middot; {{ entry_count }} entries
                     {% endif %}
+                    {% if architecture is defined and architecture == 'transformer' %}
+                        &middot; <span class="arch-badge arch-transformer">transformer</span>
+                    {% elif architecture is defined %}
+                        &middot; <span class="arch-badge arch-tfidf">tf-idf</span>
+                    {% endif %}
                 </span>
             </div>
             <nav class="top-bar-nav">
