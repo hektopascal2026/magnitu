@@ -1,9 +1,15 @@
 """
 Sync engine: connects to Seismo's API to fetch entries and push scores/recipe.
+
+Magnitu 2: after pulling entries, computes transformer embeddings for new
+entries and stores them in the DB so scoring stays instant.
 """
+import logging
 import httpx
 from config import get_config
 import db
+
+logger = logging.getLogger(__name__)
 
 
 def _request(method: str, params: dict, **kwargs) -> httpx.Response:
@@ -20,6 +26,7 @@ def _request(method: str, params: dict, **kwargs) -> httpx.Response:
 def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -> int:
     """
     Fetch entries from Seismo and store locally.
+    In transformer mode, also computes embeddings for new entries.
     Returns number of entries fetched.
     """
     params = {"action": "magnitu_entries", "type": entry_type, "limit": str(limit)}
@@ -31,9 +38,33 @@ def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -
     entries = data.get("entries", [])
     if entries:
         db.upsert_entries(entries)
-        db.log_sync("pull", len(entries), f"type={entry_type}, since={since}")
+        db.log_sync("pull", len(entries), "type={}, since={}".format(entry_type, since))
+
+    # Compute embeddings for entries that don't have them yet
+    cfg = get_config()
+    if cfg.get("model_architecture") == "transformer":
+        _compute_pending_embeddings()
 
     return len(entries)
+
+
+def _compute_pending_embeddings():
+    """Compute and store embeddings for all entries that lack them."""
+    unembedded = db.get_entries_without_embeddings(limit=1000)
+    if not unembedded:
+        return
+
+    logger.info("Computing embeddings for %d entries...", len(unembedded))
+    try:
+        from pipeline import embed_entries
+        emb_bytes_list = embed_entries(unembedded)
+        updates = []
+        for entry, emb_bytes in zip(unembedded, emb_bytes_list):
+            updates.append((emb_bytes, entry["entry_type"], entry["entry_id"]))
+        db.store_embeddings_batch(updates)
+        logger.info("Stored %d embeddings.", len(updates))
+    except Exception as e:
+        logger.warning("Failed to compute embeddings: %s", e)
 
 
 def push_scores(scores: list[dict], model_version: int, model_meta: dict = None) -> dict:
@@ -73,6 +104,7 @@ def push_labels() -> dict:
                 "entry_type": lbl["entry_type"],
                 "entry_id": lbl["entry_id"],
                 "label": lbl["label"],
+                "reasoning": lbl.get("reasoning", ""),
                 "labeled_at": lbl.get("updated_at") or lbl.get("created_at", ""),
             }
             for lbl in all_labels

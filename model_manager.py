@@ -2,10 +2,14 @@
 Model Manager: handles export/import of portable .magnitu model packages.
 
 A .magnitu file is a zip archive containing:
-  - manifest.json  — model identity, version chain, metrics
-  - model.joblib   — trained sklearn pipeline (if trained)
+  - manifest.json  — model identity, version chain, metrics, architecture
+  - model.joblib   — trained classifier (sklearn pipeline or LogReg head)
   - recipe.json    — distilled recipe (if exists)
-  - labels.json    — all labeled entries with text (for retraining)
+  - labels.json    — all labeled entries with text + reasoning (for retraining)
+
+Magnitu 2: transformer models export just the classifier head (tiny, ~KB).
+The base transformer model (distilroberta-base) is downloaded from HuggingFace
+on import.  Embeddings are recomputed from the base model after import.
 """
 import json
 import uuid
@@ -19,7 +23,7 @@ from typing import Optional
 import joblib
 
 import db
-from config import MODELS_DIR
+from config import MODELS_DIR, VERSION, get_config
 
 
 # ─── Profile helpers ───
@@ -87,8 +91,11 @@ def export_model(output_path: str = None) -> str:
     active_model = db.get_active_model()
     version_chain = _get_version_chain()
 
+    config = get_config()
+
     # Build manifest
     manifest = {
+        "magnitu_version": VERSION,
         "model_name": profile["model_name"],
         "model_uuid": profile["model_uuid"],
         "description": profile.get("description", ""),
@@ -96,6 +103,8 @@ def export_model(output_path: str = None) -> str:
         "exported_at": datetime.utcnow().isoformat(),
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
+        "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
+        "transformer_model_name": config.get("transformer_model_name", "distilroberta-base"),
         "metrics": {},
         "version_chain": version_chain,
     }
@@ -164,11 +173,13 @@ def export_as_new_model(new_name: str, new_description: str, output_path: str = 
     if not new_name:
         raise ValueError("New model name is required.")
 
+    config = get_config()
     active_model = db.get_active_model()
     version_chain = _get_version_chain()
 
     # Build manifest with new identity but parent lineage
     manifest = {
+        "magnitu_version": VERSION,
         "model_name": new_name,
         "model_uuid": uuid.uuid4().hex,
         "description": new_description.strip(),
@@ -176,6 +187,8 @@ def export_as_new_model(new_name: str, new_description: str, output_path: str = 
         "exported_at": datetime.utcnow().isoformat(),
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
+        "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
+        "transformer_model_name": config.get("transformer_model_name", "distilroberta-base"),
         "metrics": {},
         "version_chain": version_chain,
         # Immutable parent lineage — cannot be changed or suppressed
@@ -262,6 +275,7 @@ def import_model(file_path: str) -> dict:
         imported_uuid = manifest.get("model_uuid", "")
         imported_version = manifest.get("version", 0)
         imported_description = manifest.get("description", "")
+        imported_architecture = manifest.get("architecture", "tfidf")
 
         result = {
             "model_name": imported_name,
@@ -325,6 +339,16 @@ def import_model(file_path: str) -> dict:
                 model_path=str(dest),
                 recipe_path=recipe_dest,
             )
+
+            # Update architecture in the model record
+            conn = db.get_db()
+            conn.execute(
+                "UPDATE models SET architecture = ? WHERE version = ?",
+                (imported_architecture, imported_version)
+            )
+            conn.commit()
+            conn.close()
+
             result["model_loaded"] = True
 
         # Set or update model profile

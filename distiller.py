@@ -1,22 +1,46 @@
 """
-Recipe Distiller: converts a trained scikit-learn model into a lightweight
-keyword-weight JSON recipe that seismo's PHP can evaluate.
+Recipe Distiller: converts a trained model into a lightweight keyword-weight
+JSON recipe that seismo's PHP can evaluate.
+
+Magnitu 2: when the active model is a transformer, uses knowledge distillation.
+A TF-IDF 'student' model is trained on the transformer's predictions across all
+entries.  The recipe is then extracted from the student's coefficients — same
+format, same PHP, but informed by transformer-quality classifications.
+
+Also incorporates user reasoning text: key phrases from reasoning annotations
+are boosted in the recipe so human-stated priorities carry extra weight.
 """
 import json
+import re
+import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 
 import db
 from config import MODELS_DIR, get_config
-from pipeline import load_active_model, get_feature_importance, score_entries
+from pipeline import (
+    load_active_model,
+    get_feature_importance,
+    score_entries,
+    train_tfidf_student,
+    build_tfidf_pipeline,
+    _prepare_text,
+)
+
+logger = logging.getLogger(__name__)
 
 
-def distill_recipe(top_n: int = None):
+def distill_recipe(top_n: Optional[int] = None):
     """
-    Extract top keywords per class from the active model
-    and package them as a JSON recipe for seismo.
+    Extract top keywords per class from the active model and package them as
+    a JSON recipe for seismo.
+
+    For TF-IDF models: extracts directly from coefficients (Magnitu 1 path).
+    For transformer models: trains a TF-IDF student via knowledge distillation,
+    then extracts from the student's coefficients (Magnitu 2 path).
 
     Returns the recipe dict, or None if no active model.
     """
@@ -24,20 +48,19 @@ def distill_recipe(top_n: int = None):
     if top_n is None:
         top_n = config.get("recipe_top_keywords", 200)
 
-    model = load_active_model()
-    if model is None:
-        return None
-
     model_info = db.get_active_model()
     if not model_info:
         return None
 
-    # Get feature importance per class
-    importance = get_feature_importance()
+    arch = model_info.get("architecture", "tfidf")
+
+    if arch == "transformer":
+        importance = _distill_from_transformer(top_n)
+    else:
+        importance = get_feature_importance()
+
     if not importance:
         return None
-
-    class_names = list(importance.keys())
 
     # Build keyword map: {keyword: {class: weight, ...}}
     keywords = {}
@@ -48,9 +71,7 @@ def distill_recipe(top_n: int = None):
             if abs(weight) < 0.01:
                 continue
 
-            # Separate source-type features from text features
             if feature.startswith("source_type_") or feature.startswith("x0_"):
-                # One-hot encoded source feature
                 source_name = feature.replace("source_type_", "").replace("x0_", "")
                 if source_name not in source_weights:
                     source_weights[source_name] = {}
@@ -59,6 +80,9 @@ def distill_recipe(top_n: int = None):
                 if feature not in keywords:
                     keywords[feature] = {}
                 keywords[feature][cls] = round(float(weight), 4)
+
+    # Boost keywords from user reasoning annotations
+    keywords = _boost_from_reasoning(keywords)
 
     # Build recipe
     recipe = {
@@ -77,7 +101,7 @@ def distill_recipe(top_n: int = None):
     }
 
     # Save recipe to disk
-    recipe_filename = f"recipe_v{model_info['version']}.json"
+    recipe_filename = "recipe_v{}.json".format(model_info["version"])
     recipe_path = str(MODELS_DIR / recipe_filename)
     with open(recipe_path, "w") as f:
         json.dump(recipe, f, indent=2, ensure_ascii=False)
@@ -94,42 +118,114 @@ def distill_recipe(top_n: int = None):
     return recipe
 
 
+def _distill_from_transformer(top_n: int) -> dict:
+    """
+    Knowledge distillation: train a TF-IDF student from the transformer's
+    predictions, then extract feature importance from the student.
+    """
+    logger.info("Knowledge distillation: training TF-IDF student from transformer...")
+    student = train_tfidf_student()
+    if student is None:
+        logger.warning("Could not train TF-IDF student for distillation.")
+        return {}
+
+    # Extract feature importance from the student
+    preprocessor = student.named_steps["features"]
+    tfidf = preprocessor.transformers_[0][1]
+    tfidf_names = tfidf.get_feature_names_out().tolist()
+
+    try:
+        source_enc = preprocessor.transformers_[1][1]
+        source_names = source_enc.get_feature_names_out().tolist()
+    except (IndexError, AttributeError):
+        source_names = []
+
+    all_names = tfidf_names + source_names
+    classifier = student.named_steps["classifier"]
+    class_names = classifier.classes_.tolist()
+    coef_matrix = classifier.coef_
+
+    result = {}
+    for i, cls in enumerate(class_names):
+        coefs = coef_matrix[i]
+        pairs = list(zip(all_names[:len(coefs)], coefs.tolist()))
+        pairs.sort(key=lambda x: abs(x[1]), reverse=True)
+        result[cls] = pairs
+
+    logger.info("Knowledge distillation complete. %d features extracted.", len(all_names))
+    return result
+
+
+def _boost_from_reasoning(keywords: dict) -> dict:
+    """
+    Extract key phrases from user reasoning annotations and boost their
+    weights in the recipe.  This ensures that explicitly-stated reasons
+    ('links politician X to company Y') increase the recipe's sensitivity
+    to those terms.
+    """
+    reasoning_labels = db.get_all_reasoning_texts()
+    if not reasoning_labels:
+        return keywords
+
+    BOOST_FACTOR = 1.5
+
+    for rl in reasoning_labels:
+        reasoning = rl.get("reasoning", "")
+        label = rl.get("label", "")
+        if not reasoning or not label:
+            continue
+
+        # Tokenize reasoning into words (simple split, lowercase)
+        tokens = re.findall(r'\b[a-zA-Z\u00C0-\u024F]{3,}\b', reasoning.lower())
+
+        for token in tokens:
+            if token in keywords:
+                # Boost existing keyword's weight for this class
+                if label in keywords[token]:
+                    keywords[token][label] = round(
+                        keywords[token][label] * BOOST_FACTOR, 4
+                    )
+            else:
+                # Add as new keyword with a moderate base weight
+                keywords[token] = {label: 0.1}
+
+    return keywords
+
+
 def evaluate_recipe_quality(recipe: dict, sample_size: int = 100) -> float:
     """
     Compare recipe-based scoring against full model scoring on a sample.
     Returns correlation score (0-1) indicating how well recipe approximates the model.
     """
-    model = load_active_model()
-    if model is None:
-        return 0.0
-
     entries = db.get_all_entries()[:sample_size]
     if not entries:
         return 0.0
 
-    # Get full model scores
     full_scores = score_entries(entries)
     if not full_scores:
         return 0.0
 
     # Get recipe-based scores (simplified scoring matching seismo's PHP logic)
     recipe_scores = []
-    keywords = recipe.get("keywords", {})
+    kw = recipe.get("keywords", {})
     source_weights_map = recipe.get("source_weights", {})
     classes = recipe.get("classes", ["investigation_lead", "important", "background", "noise"])
     class_wts = recipe.get("class_weights", [1.0, 0.66, 0.33, 0.0])
 
     for entry in entries:
-        text = f"{entry.get('title', '')} {entry.get('description', '')} {entry.get('content', '')}".lower()
+        text = "{} {} {}".format(
+            entry.get("title", ""),
+            entry.get("description", ""),
+            entry.get("content", ""),
+        ).lower()
         tokens = text.split()
-        # Add bigrams
-        bigrams = [f"{tokens[i]} {tokens[i+1]}" for i in range(len(tokens)-1)]
+        bigrams = ["{} {}".format(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
         all_tokens = tokens + bigrams
 
         class_scores = {c: 0.0 for c in classes}
         for token in all_tokens:
-            if token in keywords:
-                for cls, wt in keywords[token].items():
+            if token in kw:
+                for cls, wt in kw[token].items():
                     if cls in class_scores:
                         class_scores[cls] += wt
 
@@ -143,12 +239,14 @@ def evaluate_recipe_quality(recipe: dict, sample_size: int = 100) -> float:
         max_s = max(class_scores.values()) if class_scores else 0
         exp_scores = {c: np.exp(s - max_s) for c, s in class_scores.items()}
         exp_sum = sum(exp_scores.values())
-        probs = {c: exp_scores[c] / exp_sum if exp_sum > 0 else 1/len(classes) for c in classes}
+        probs = {
+            c: exp_scores[c] / exp_sum if exp_sum > 0 else 1 / len(classes)
+            for c in classes
+        }
 
         composite = sum(probs.get(c, 0) * class_wts[i] for i, c in enumerate(classes))
         recipe_scores.append(composite)
 
-    # Compute correlation between full model and recipe scores
     full_vals = [s["relevance_score"] for s in full_scores[:len(recipe_scores)]]
 
     if len(full_vals) < 2:
