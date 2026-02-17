@@ -1,5 +1,5 @@
 """
-Magnitu — ML-powered relevance scoring for Seismo.
+Magnitu 2 — ML-powered relevance scoring for Seismo.
 FastAPI application: serves the labeling UI, dashboard, and orchestrates ML pipeline.
 """
 from fastapi import FastAPI, Request, Form, HTTPException
@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 import json
+from typing import Optional
 
 import db
 import sync
@@ -16,9 +17,9 @@ import explainer
 import distiller
 import sampler
 import model_manager
-from config import get_config, save_config, BASE_DIR
+from config import get_config, save_config, BASE_DIR, VERSION
 
-app = FastAPI(title="Magnitu", version="0.1.0")
+app = FastAPI(title="Magnitu", version=VERSION)
 
 # Static files and templates
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
@@ -35,11 +36,14 @@ def _base_context(request: Request) -> dict:
     return {
         "request": request,
         "config": config,
+        "version": VERSION,
         "label_count": db.get_label_count(),
         "entry_count": db.get_entry_count(),
         "active_model": active_model,
         "label_distribution": db.get_label_distribution(),
         "profile": profile,
+        "architecture": config.get("model_architecture", "transformer"),
+        "embedding_count": db.get_embedding_count(),
     }
 
 
@@ -54,9 +58,11 @@ async def labeling_page(request: Request):
     ctx = _base_context(request)
     entries = sampler.get_smart_entries(limit=30)
 
-    # Add existing labels
+    # Add existing labels and reasoning
     for entry in entries:
-        entry["_label"] = db.get_label(entry["entry_type"], entry["entry_id"])
+        label_data = db.get_label_with_reasoning(entry["entry_type"], entry["entry_id"])
+        entry["_label"] = label_data["label"] if label_data else None
+        entry["_reasoning"] = label_data["reasoning"] if label_data else ""
 
     ctx["entries"] = entries
     ctx["unlabeled_count"] = len([e for e in entries if e["_label"] is None])
@@ -266,12 +272,13 @@ async def set_label(
     entry_type: str = Form(...),
     entry_id: int = Form(...),
     label: str = Form(...),
+    reasoning: str = Form(""),
 ):
-    """Set or update a label for an entry."""
+    """Set or update a label for an entry, with optional reasoning."""
     valid_labels = ["investigation_lead", "important", "background", "noise"]
     if label not in valid_labels:
-        raise HTTPException(400, f"Invalid label. Must be one of: {valid_labels}")
-    db.set_label(entry_type, entry_id, label)
+        raise HTTPException(400, "Invalid label. Must be one of: {}".format(valid_labels))
+    db.set_label(entry_type, entry_id, label, reasoning=reasoning.strip())
 
     # Push label to Seismo in background (best-effort)
     try:
@@ -296,16 +303,23 @@ async def remove_label(
 
 @app.post("/api/sync/pull")
 async def sync_pull():
-    """Pull entries and labels from Seismo."""
+    """Pull entries and labels from Seismo. In transformer mode, also computes embeddings."""
+    import asyncio
     try:
-        count = sync.pull_entries()
+        loop = asyncio.get_event_loop()
+        count = await loop.run_in_executor(None, sync.pull_entries)
         # Also pull labels so new instances get existing training data
         labels_imported = 0
         try:
-            labels_imported = sync.pull_labels()
+            labels_imported = await loop.run_in_executor(None, sync.pull_labels)
         except Exception:
             pass  # Seismo might not have the labels endpoint yet
-        return {"success": True, "entries_fetched": count, "labels_imported": labels_imported}
+        return {
+            "success": True,
+            "entries_fetched": count,
+            "labels_imported": labels_imported,
+            "embeddings": db.get_embedding_count(),
+        }
     except Exception as e:
         raise HTTPException(500, str(e))
 
@@ -402,12 +416,14 @@ async def sync_test():
 @app.post("/api/train")
 async def train_model():
     """Train a new model on all labeled entries."""
-    result = pipeline.train()
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, pipeline.train)
     if not result.get("success"):
         return JSONResponse(result, status_code=400)
 
     # Auto-distill recipe after training
-    recipe = distiller.distill_recipe()
+    recipe = await loop.run_in_executor(None, distiller.distill_recipe)
     if recipe:
         quality = distiller.evaluate_recipe_quality(recipe)
         result["recipe_version"] = recipe.get("version")
@@ -448,10 +464,14 @@ async def keywords(class_name: str = None, limit: int = 50):
 @app.get("/api/stats")
 async def stats():
     """Get current system stats."""
+    config = get_config()
     model = db.get_active_model()
     return {
+        "magnitu_version": VERSION,
+        "architecture": config.get("model_architecture", "transformer"),
         "entries": db.get_entry_count(),
         "labels": db.get_label_count(),
+        "embeddings": db.get_embedding_count(),
         "label_distribution": db.get_label_distribution(),
         "active_model": model,
         "models_count": len(db.get_all_models()),
@@ -466,11 +486,29 @@ async def update_settings(request: Request):
     data = await request.json()
     config = get_config()
     for key in ["seismo_url", "api_key", "min_labels_to_train",
-                "recipe_top_keywords", "auto_train_after_n_labels", "alert_threshold"]:
+                "recipe_top_keywords", "auto_train_after_n_labels", "alert_threshold",
+                "model_architecture", "transformer_model_name"]:
         if key in data:
             config[key] = data[key]
     save_config(config)
     return {"success": True, "config": config}
+
+
+@app.post("/api/embeddings/compute")
+async def compute_embeddings():
+    """Compute embeddings for all entries that don't have them yet."""
+    import asyncio
+    config = get_config()
+    if config.get("model_architecture") != "transformer":
+        return {"success": False, "error": "Not in transformer mode."}
+
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, sync._compute_pending_embeddings)
+    return {
+        "success": True,
+        "embedding_count": db.get_embedding_count(),
+        "entry_count": db.get_entry_count(),
+    }
 
 
 # ─── Helpers ───
