@@ -8,7 +8,7 @@ A .magnitu file is a zip archive containing:
   - labels.json    — all labeled entries with text + reasoning (for retraining)
 
 Magnitu 2: transformer models export just the classifier head (tiny, ~KB).
-The base transformer model (distilroberta-base) is downloaded from HuggingFace
+The base transformer model (xlm-roberta-base) is downloaded from HuggingFace
 on import.  Embeddings are recomputed from the base model after import.
 """
 import json
@@ -104,7 +104,7 @@ def export_model(output_path: str = None) -> str:
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
         "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
-        "transformer_model_name": config.get("transformer_model_name", "distilroberta-base"),
+        "transformer_model_name": config.get("transformer_model_name", "xlm-roberta-base"),
         "metrics": {},
         "version_chain": version_chain,
     }
@@ -188,7 +188,7 @@ def export_as_new_model(new_name: str, new_description: str, output_path: str = 
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
         "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
-        "transformer_model_name": config.get("transformer_model_name", "distilroberta-base"),
+        "transformer_model_name": config.get("transformer_model_name", "xlm-roberta-base"),
         "metrics": {},
         "version_chain": version_chain,
         # Immutable parent lineage — cannot be changed or suppressed
@@ -307,8 +307,10 @@ def import_model(file_path: str) -> dict:
             if local_version == 0:
                 # No local model — always load
                 should_load_model = True
-            elif imported_version > local_version:
-                # Imported is newer — load it
+            elif imported_version >= local_version:
+                # Imported is same or newer — load it.  Same-version import
+                # covers the rename/re-export workflow where user exports,
+                # changes identity, and imports back.
                 should_load_model = True
 
         if should_load_model and model_file.exists():
@@ -351,34 +353,32 @@ def import_model(file_path: str) -> dict:
 
             result["model_loaded"] = True
 
-        # Set or update model profile
-        current_profile = get_profile()
-        if not current_profile:
-            # No profile yet — adopt the imported one
-            db.set_model_profile(
-                model_name=imported_name,
-                model_uuid=imported_uuid,
-                description=imported_description,
-                created_at=manifest.get("created_at", ""),
-            )
-        elif local_version == 0 and pre_import_label_count == 0:
-            # Profile exists but is empty (just created, no work done) — adopt imported identity
-            db.set_model_profile(
-                model_name=imported_name,
-                model_uuid=imported_uuid,
-                description=imported_description,
-                created_at=manifest.get("created_at", ""),
-            )
+        # Always adopt the imported profile.  The user explicitly chose to
+        # import this .magnitu file — that means they want its identity
+        # (name, description) regardless of whether the trained model inside
+        # is newer or older than the local one.  This is the rename workflow:
+        # export as "pascal-two", import back, keep working.
+        db.set_model_profile(
+            model_name=imported_name,
+            model_uuid=imported_uuid,
+            description=imported_description,
+            created_at=manifest.get("created_at", ""),
+        )
+        result["profile_updated"] = True
 
         # Build message
         new_labels = result["labels"]["imported"] + result["labels"]["updated"]
         parts = []
+        parts.append(f"profile set to \"{imported_name}\"")
         if new_labels:
             parts.append(f"{new_labels} labels imported")
         if result["model_loaded"]:
             parts.append(f"model v{imported_version} loaded")
-        elif imported_version and imported_version <= local_version:
-            parts.append(f"model v{imported_version} skipped (local v{local_version} is newer)")
+        elif imported_version and imported_version < local_version:
+            parts.append(
+                f"keeping local model v{local_version} "
+                f"(imported v{imported_version} is older)"
+            )
         if not parts:
             parts.append("no new data")
 

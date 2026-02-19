@@ -540,9 +540,218 @@ except Exception as e:
 
 
 # ═══════════════════════════════════════════
-#  10. FastAPI App
+#  10. Stale Embedding Invalidation on Content Update
 # ═══════════════════════════════════════════
-print("\n=== 10. FastAPI App ===")
+print("\n=== 10. Stale Embedding on Content Update ===")
+
+t = test("Embedding preserved when content unchanged")
+try:
+    entry = {
+        "entry_type": "feed_item", "entry_id": 900,
+        "title": "Original title", "description": "Original desc", "content": "Original content",
+        "link": "", "author": "", "published_date": "2024-06-01",
+        "source_name": "Test", "source_category": "", "source_type": "rss",
+    }
+    db.upsert_entry(entry)
+    fake_emb = np.random.randn(768).astype(np.float32)
+    db.store_embedding("feed_item", 900, fake_emb.tobytes())
+
+    conn = db.get_db()
+    row = conn.execute(
+        "SELECT embedding FROM entries WHERE entry_type='feed_item' AND entry_id=900"
+    ).fetchone()
+    conn.close()
+    assert row["embedding"] is not None, "Embedding should exist before re-upsert"
+
+    # Re-upsert with identical content
+    db.upsert_entry(entry)
+
+    conn = db.get_db()
+    row = conn.execute(
+        "SELECT embedding FROM entries WHERE entry_type='feed_item' AND entry_id=900"
+    ).fetchone()
+    conn.close()
+    assert row["embedding"] is not None, "Embedding should be preserved when content unchanged"
+    retrieved = np.frombuffer(row["embedding"], dtype=np.float32)
+    assert np.allclose(fake_emb, retrieved), "Embedding bytes should be identical"
+    ok()
+except Exception as e:
+    fail(str(e))
+
+t = test("Embedding invalidated when title changes")
+try:
+    updated = dict(entry)
+    updated["title"] = "Changed title"
+    db.upsert_entry(updated)
+
+    conn = db.get_db()
+    row = conn.execute(
+        "SELECT embedding FROM entries WHERE entry_type='feed_item' AND entry_id=900"
+    ).fetchone()
+    conn.close()
+    assert row["embedding"] is None, "Embedding should be NULL after title change"
+    ok()
+except Exception as e:
+    fail(str(e))
+
+t = test("Embedding invalidated when content changes (batch upsert)")
+try:
+    entry2 = {
+        "entry_type": "feed_item", "entry_id": 901,
+        "title": "Batch test", "description": "Desc", "content": "Short content",
+        "link": "", "author": "", "published_date": "2024-06-01",
+        "source_name": "Test", "source_category": "", "source_type": "rss",
+    }
+    db.upsert_entries([entry2])
+    db.store_embedding("feed_item", 901, np.random.randn(768).astype(np.float32).tobytes())
+
+    # Re-upsert with changed content
+    entry2_updated = dict(entry2)
+    entry2_updated["content"] = "Much longer updated content with more details about the topic"
+    db.upsert_entries([entry2_updated])
+
+    conn = db.get_db()
+    row = conn.execute(
+        "SELECT embedding FROM entries WHERE entry_type='feed_item' AND entry_id=901"
+    ).fetchone()
+    conn.close()
+    assert row["embedding"] is None, "Embedding should be NULL after content change in batch upsert"
+    ok()
+except Exception as e:
+    fail(str(e))
+
+t = test("Embedding preserved in batch when content unchanged")
+try:
+    entry3 = {
+        "entry_type": "feed_item", "entry_id": 902,
+        "title": "Stable entry", "description": "Same", "content": "Same content",
+        "link": "", "author": "", "published_date": "2024-06-01",
+        "source_name": "Test", "source_category": "", "source_type": "rss",
+    }
+    db.upsert_entries([entry3])
+    emb_bytes = np.random.randn(768).astype(np.float32).tobytes()
+    db.store_embedding("feed_item", 902, emb_bytes)
+
+    # Re-upsert with same content
+    db.upsert_entries([entry3])
+
+    conn = db.get_db()
+    row = conn.execute(
+        "SELECT embedding FROM entries WHERE entry_type='feed_item' AND entry_id=902"
+    ).fetchone()
+    conn.close()
+    assert row["embedding"] is not None, "Embedding should be preserved when batch content unchanged"
+    ok()
+except Exception as e:
+    fail(str(e))
+
+
+# ═══════════════════════════════════════════
+#  11. Recipe Text-Length Normalization
+# ═══════════════════════════════════════════
+print("\n=== 11. Recipe Text-Length Normalization ===")
+
+t = test("Recipe normalization reduces score variance across text lengths")
+try:
+    # Create entries with wildly different text lengths but similar topics
+    short_entry = {
+        "entry_type": "feed_item", "entry_id": 800,
+        "title": "Toxic baby food recall", "description": "Contamination found",
+        "content": "",
+        "link": "", "author": "", "published_date": "2024-06-01",
+        "source_name": "News A", "source_category": "health", "source_type": "rss",
+    }
+    long_entry = {
+        "entry_type": "feed_item", "entry_id": 801,
+        "title": "Toxic baby food recall investigation",
+        "description": "Major contamination found in baby food products",
+        "content": (
+            "The government agency announced today that baby food products from "
+            "multiple manufacturers have been found contaminated with toxic substances. "
+            "The investigation reveals systematic quality control failures in the production "
+            "chain. Officials have issued an immediate recall of all affected products. "
+            "Consumers are urged to check their pantries and return any contaminated items. "
+            "The toxic contamination was first detected during routine testing at a federal "
+            "laboratory. Preliminary results show that the contamination levels exceed safe "
+            "thresholds by a significant margin. Health authorities are monitoring the "
+            "situation closely and have set up a hotline for concerned parents."
+        ),
+        "link": "", "author": "", "published_date": "2024-06-01",
+        "source_name": "News B", "source_category": "health", "source_type": "rss",
+    }
+    db.upsert_entries([short_entry, long_entry])
+
+    # Label enough for training
+    db.set_label("feed_item", 5, "investigation_lead")
+    db.set_label("feed_item", 6, "noise")
+
+    # Ensure we have a transformer model active
+    cfg = config.get_config()
+    cfg["model_architecture"] = "transformer"
+    config.save_config(cfg)
+
+    conn = db.get_db()
+    conn.execute("DELETE FROM models")
+    conn.commit()
+    conn.close()
+
+    result = pipeline.train()
+    assert result["success"], result.get("error", "")
+
+    recipe = distiller.distill_recipe()
+    if recipe:
+        # Evaluate recipe scores for both entries
+        kw = recipe.get("keywords", {})
+        sw = recipe.get("source_weights", {})
+        classes = recipe["classes"]
+        class_wts = recipe["class_weights"]
+
+        def recipe_score(entry_dict):
+            text = "{} {} {}".format(
+                entry_dict.get("title", ""),
+                entry_dict.get("description", ""),
+                entry_dict.get("content", ""),
+            ).lower()
+            tokens = text.split()
+            bigrams = ["{} {}".format(tokens[j], tokens[j + 1])
+                       for j in range(len(tokens) - 1)]
+            all_tokens = tokens + bigrams
+            cs = {c: 0.0 for c in classes}
+            for tok in all_tokens:
+                if tok in kw:
+                    for cls2, wt2 in kw[tok].items():
+                        if cls2 in cs:
+                            cs[cls2] += wt2
+            src = entry_dict.get("source_type", "")
+            if src in sw:
+                for cls2, wt2 in sw[src].items():
+                    if cls2 in cs:
+                        cs[cls2] += wt2
+            max_s = max(cs.values()) if cs else 0
+            es = {c: np.exp(s - max_s) for c, s in cs.items()}
+            es_sum = sum(es.values())
+            probs = {c: es[c] / es_sum if es_sum > 0 else 0.25 for c in classes}
+            return sum(probs.get(c, 0) * class_wts[i] for i, c in enumerate(classes))
+
+        short_score = recipe_score(short_entry)
+        long_score = recipe_score(long_entry)
+        diff = abs(short_score - long_score)
+
+        # After normalization, the difference between same-topic entries of
+        # different lengths should be < 0.8 (before normalization it could
+        # be 0.95+ i.e. 5 vs 100 on seismo's display)
+        assert diff < 0.8, \
+            "Same-topic entries should have score difference < 0.8, got {:.3f} " \
+            "(short={:.3f}, long={:.3f})".format(diff, short_score, long_score)
+    ok()
+except Exception as e:
+    fail(str(e))
+
+
+# ═══════════════════════════════════════════
+#  12. FastAPI App
+# ═══════════════════════════════════════════
+print("\n=== 12. FastAPI App ===")
 
 t = test("App creates with correct version")
 try:

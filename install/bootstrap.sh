@@ -147,7 +147,10 @@ if [ -z "$SKIP_CONFIG" ]; then
   "min_labels_to_train": 20,
   "recipe_top_keywords": 200,
   "auto_train_after_n_labels": 10,
-  "alert_threshold": 0.75
+  "alert_threshold": 0.75,
+  "model_architecture": "transformer",
+  "transformer_model_name": "xlm-roberta-base",
+  "embedding_dim": 768
 }
 CONF
     echo "         Config saved."

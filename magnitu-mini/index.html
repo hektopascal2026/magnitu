@@ -367,10 +367,27 @@ body {
             opts.headers['Content-Type'] = 'application/json';
             opts.body = JSON.stringify(body);
         }
-        return fetch(url, opts).then(function(r) {
-            if (!r.ok) throw new Error('HTTP ' + r.status);
-            return r.json();
-        });
+        return fetch(url, opts)
+            .catch(function(err) {
+                var pageOrigin = window.location.origin;
+                try { var apiOrigin = new URL(cfg.url).origin; } catch(e) { var apiOrigin = '?'; }
+                if (pageOrigin !== apiOrigin) {
+                    throw new Error(
+                        'CORS blocked: this page is on ' + pageOrigin +
+                        ' but Seismo is on ' + apiOrigin +
+                        '. They must match exactly (including www).'
+                    );
+                }
+                throw new Error('Network error: ' + err.message);
+            })
+            .then(function(r) {
+                if (!r.ok) {
+                    if (r.status === 401) throw new Error('Bad API key (HTTP 401)');
+                    if (r.status === 403) throw new Error('Access denied (HTTP 403)');
+                    throw new Error('HTTP ' + r.status);
+                }
+                return r.json();
+            });
     }
 
     function fetchEntries() {
@@ -408,7 +425,7 @@ body {
             '<h2>Connect to Seismo</h2>' +
             '<input type="url" id="setupUrl" placeholder="https://your-domain.ch/seismo/index.php" value="' + (cfg.url || '') + '">' +
             '<input type="text" id="setupKey" placeholder="API key" value="' + (cfg.apiKey || '') + '" style="font-family:monospace;">' +
-            '<div class="help">Enter your Seismo URL and API key. Same credentials as in Magnitu&rsquo;s settings.</div>' +
+            '<div class="help">Enter your Seismo URL and API key. Same credentials as in Magnitu&rsquo;s settings.<br>URL must start with the same domain as this page (' + window.location.origin + ').</div>' +
             '<button class="btn btn-primary" id="setupSave">Connect</button>';
         app.appendChild(div);
 

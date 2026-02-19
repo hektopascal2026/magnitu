@@ -25,7 +25,7 @@ DEFAULTS = {
     "alert_threshold": 0.75,
     # Transformer settings (Magnitu 2)
     "model_architecture": "transformer",     # "tfidf" or "transformer"
-    "transformer_model_name": "distilroberta-base",
+    "transformer_model_name": "xlm-roberta-base",
     "embedding_dim": 768,
 }
 

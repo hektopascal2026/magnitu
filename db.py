@@ -122,7 +122,8 @@ def init_db():
 # ─── Entry operations ───
 
 def upsert_entry(entry: dict):
-    """Insert or update a cached entry from seismo."""
+    """Insert or update a cached entry from seismo.
+    Invalidates cached embedding when text content changes so it gets recomputed."""
     conn = get_db()
     conn.execute("""
         INSERT INTO entries (entry_type, entry_id, title, description, content, link, author,
@@ -133,14 +134,22 @@ def upsert_entry(entry: dict):
             title=excluded.title, description=excluded.description, content=excluded.content,
             link=excluded.link, author=excluded.author, published_date=excluded.published_date,
             source_name=excluded.source_name, source_category=excluded.source_category,
-            source_type=excluded.source_type, fetched_at=datetime('now')
+            source_type=excluded.source_type, fetched_at=datetime('now'),
+            embedding = CASE
+                WHEN entries.title != excluded.title
+                  OR entries.description != excluded.description
+                  OR entries.content != excluded.content
+                THEN NULL
+                ELSE entries.embedding
+            END
     """, entry)
     conn.commit()
     conn.close()
 
 
 def upsert_entries(entries: List[dict]):
-    """Batch upsert entries."""
+    """Batch upsert entries.
+    Invalidates cached embedding when text content changes so it gets recomputed."""
     conn = get_db()
     conn.executemany("""
         INSERT INTO entries (entry_type, entry_id, title, description, content, link, author,
@@ -151,7 +160,14 @@ def upsert_entries(entries: List[dict]):
             title=excluded.title, description=excluded.description, content=excluded.content,
             link=excluded.link, author=excluded.author, published_date=excluded.published_date,
             source_name=excluded.source_name, source_category=excluded.source_category,
-            source_type=excluded.source_type, fetched_at=datetime('now')
+            source_type=excluded.source_type, fetched_at=datetime('now'),
+            embedding = CASE
+                WHEN entries.title != excluded.title
+                  OR entries.description != excluded.description
+                  OR entries.content != excluded.content
+                THEN NULL
+                ELSE entries.embedding
+            END
     """, entries)
     conn.commit()
     conn.close()
