@@ -338,6 +338,9 @@
             .then(function(data) {
                 if (data.success) {
                     var msg = 'Fetched ' + data.entries_fetched + ' entries';
+                    if (data.embeddings_computed > 0) {
+                        msg += ', ' + data.embeddings_computed + ' embeddings computed';
+                    }
                     if (data.labels_synced > 0) {
                         msg += ', ' + data.labels_synced + ' labels synced';
                     }
@@ -345,7 +348,10 @@
                         msg += ' (some label conflicts resolved by timestamp)';
                     }
                     flash(msg + '.', 'success');
-                    setTimeout(function() { location.reload(); }, 1000);
+                    if (data.embedding_warning) {
+                        flash(data.embedding_warning + ' Try syncing again.', 'error');
+                    }
+                    setTimeout(function() { location.reload(); }, 1500);
                 } else {
                     flash('Sync failed: ' + (data.detail || 'Unknown error'), 'error');
                 }

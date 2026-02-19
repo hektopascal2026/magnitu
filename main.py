@@ -372,24 +372,36 @@ async def sync_pull():
     import asyncio
     try:
         loop = asyncio.get_event_loop()
+        emb_before = db.get_embedding_count()
         count = await loop.run_in_executor(None, sync.pull_entries)
-        # Also pull labels so new instances get existing training data
+        emb_after = db.get_embedding_count()
+
         labels_synced = 0
         try:
             labels_synced = await loop.run_in_executor(None, sync.pull_labels)
         except Exception:
-            pass  # Seismo might not have the labels endpoint yet
+            pass
 
-        # Check recent sync log for conflict details
         syncs = db.get_recent_syncs(1)
         sync_detail = syncs[0]["details"] if syncs else ""
+
+        entry_count = db.get_entry_count()
+        emb_computed = emb_after - emb_before
+        emb_warning = ""
+        if entry_count > 0 and emb_after < entry_count * 0.5:
+            emb_warning = "Only {}/{} entries have embeddings. Model scoring will be limited.".format(
+                emb_after, entry_count
+            )
 
         return {
             "success": True,
             "entries_fetched": count,
             "labels_synced": labels_synced,
             "sync_detail": sync_detail,
-            "embeddings": db.get_embedding_count(),
+            "embeddings": emb_after,
+            "embeddings_computed": emb_computed,
+            "entry_count": entry_count,
+            "embedding_warning": emb_warning,
         }
     except Exception as e:
         raise HTTPException(500, str(e))
@@ -398,6 +410,7 @@ async def sync_pull():
 @app.post("/api/sync/push")
 async def sync_push():
     """Score all entries and push scores + recipe to Seismo."""
+    import asyncio
     import httpx as _httpx
 
     model_info = db.get_active_model()
@@ -408,13 +421,30 @@ async def sync_push():
     if not all_entries:
         raise HTTPException(400, "No entries to score.")
 
+    # Compute any missing embeddings before scoring (push is explicit, user expects wait)
+    cfg = get_config()
+    if cfg.get("model_architecture") == "transformer":
+        missing = db.get_entries_without_embeddings(limit=5000)
+        if missing:
+            try:
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, sync._compute_pending_embeddings)
+            except Exception:
+                pass
+
     try:
         scores = pipeline.score_entries(all_entries)
     except Exception as e:
         raise HTTPException(500, "Scoring failed: {}".format(e))
 
     if not scores:
-        raise HTTPException(400, "No scores produced. Model may need retraining after sync.")
+        emb_count = db.get_embedding_count()
+        entry_count = db.get_entry_count()
+        raise HTTPException(
+            400,
+            "No scores produced. Embeddings: {}/{} entries. ".format(emb_count, entry_count)
+            + "Try syncing again to compute embeddings, then retrain."
+        )
 
     for i, entry in enumerate(all_entries):
         try:
