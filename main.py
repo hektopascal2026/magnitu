@@ -623,6 +623,28 @@ def _today_label_count() -> int:
 
 # ─── Startup ───
 
+def _migrate_config():
+    """One-time config migrations that run on startup."""
+    cfg = get_config()
+    changed = False
+
+    # v2.1: switch from English-only distilroberta-base to multilingual
+    # xlm-roberta-base so German/French entries get proper embeddings.
+    if cfg.get("transformer_model_name") == "distilroberta-base":
+        import logging
+        logging.getLogger(__name__).info(
+            "Migrating transformer model: distilroberta-base → xlm-roberta-base"
+        )
+        cfg["transformer_model_name"] = "xlm-roberta-base"
+        changed = True
+
+    if changed:
+        save_config(cfg)
+        db.invalidate_all_embeddings()
+        pipeline.invalidate_embedder_cache()
+
+
 @app.on_event("startup")
 async def startup():
     db.init_db()
+    _migrate_config()
