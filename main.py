@@ -440,7 +440,11 @@ async def sync_push():
     try:
         score_result = sync.push_scores(scores, model_info["version"], model_meta=model_meta)
     except Exception as e:
-        raise HTTPException(500, f"Failed to push scores: {e}")
+        import httpx as _httpx
+        detail = str(e)
+        if isinstance(e, _httpx.HTTPStatusError):
+            detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
+        raise HTTPException(500, "Failed to push scores: {}".format(detail))
 
     # Also push labels to keep Seismo in sync
     try:
@@ -449,13 +453,21 @@ async def sync_push():
         pass
 
     # Distill and push recipe
-    recipe = distiller.distill_recipe()
+    try:
+        recipe = distiller.distill_recipe()
+    except Exception as e:
+        recipe = None
+
     recipe_result = {}
     if recipe:
         try:
             recipe_result = sync.push_recipe(recipe)
         except Exception as e:
-            recipe_result = {"error": str(e)}
+            import httpx as _httpx
+            detail = str(e)
+            if isinstance(e, _httpx.HTTPStatusError):
+                detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
+            recipe_result = {"error": detail}
 
     return {
         "success": True,
