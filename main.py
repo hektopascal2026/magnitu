@@ -398,29 +398,36 @@ async def sync_pull():
 @app.post("/api/sync/push")
 async def sync_push():
     """Score all entries and push scores + recipe to Seismo."""
+    import httpx as _httpx
+
     model_info = db.get_active_model()
     if not model_info:
         raise HTTPException(400, "No trained model. Train first.")
 
-    # Score all entries
     all_entries = db.get_all_entries()
     if not all_entries:
         raise HTTPException(400, "No entries to score.")
 
-    scores = pipeline.score_entries(all_entries)
+    try:
+        scores = pipeline.score_entries(all_entries)
+    except Exception as e:
+        raise HTTPException(500, "Scoring failed: {}".format(e))
 
-    # Add explanations
+    if not scores:
+        raise HTTPException(400, "No scores produced. Model may need retraining after sync.")
+
     for i, entry in enumerate(all_entries):
-        exp = explainer.explain_entry(entry)
-        if exp and i < len(scores):
-            scores[i]["explanation"] = {
-                "top_features": exp["top_features"],
-                "confidence": exp["confidence"],
-                "prediction": exp["prediction"],
-            }
+        try:
+            exp = explainer.explain_entry(entry)
+            if exp and i < len(scores):
+                scores[i]["explanation"] = {
+                    "top_features": exp["top_features"],
+                    "confidence": exp["confidence"],
+                    "prediction": exp["prediction"],
+                }
+        except Exception:
+            pass
 
-    # Build model metadata for Seismo — includes quality metrics so Seismo
-    # can gate whether to accept scores from a weaker model
     profile = model_manager.get_profile()
     model_meta = None
     if profile:
@@ -436,26 +443,22 @@ async def sync_push():
             "architecture": model_info.get("architecture", "tfidf"),
         }
 
-    # Push scores
     try:
         score_result = sync.push_scores(scores, model_info["version"], model_meta=model_meta)
     except Exception as e:
-        import httpx as _httpx
         detail = str(e)
         if isinstance(e, _httpx.HTTPStatusError):
             detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
         raise HTTPException(500, "Failed to push scores: {}".format(detail))
 
-    # Also push labels to keep Seismo in sync
     try:
         sync.push_labels()
     except Exception:
         pass
 
-    # Distill and push recipe
     try:
         recipe = distiller.distill_recipe()
-    except Exception as e:
+    except Exception:
         recipe = None
 
     recipe_result = {}
@@ -463,7 +466,6 @@ async def sync_push():
         try:
             recipe_result = sync.push_recipe(recipe)
         except Exception as e:
-            import httpx as _httpx
             detail = str(e)
             if isinstance(e, _httpx.HTTPStatusError):
                 detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])

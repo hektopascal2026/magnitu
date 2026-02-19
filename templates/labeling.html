@@ -395,7 +395,15 @@
             this.disabled = true;
             this.textContent = 'Pushing...';
             fetch('/api/sync/push', { method: 'POST' })
-                .then(function(r) { return r.json(); })
+                .then(function(r) {
+                    if (!r.ok) {
+                        return r.text().then(function(body) {
+                            try { var j = JSON.parse(body); throw new Error(j.detail || 'HTTP ' + r.status); }
+                            catch(e) { if (e.message) throw e; throw new Error(body.substring(0, 200) || 'HTTP ' + r.status); }
+                        });
+                    }
+                    return r.json();
+                })
                 .then(function(data) {
                     if (data.success) {
                         flash('Pushed ' + data.scores_pushed + ' scores to Seismo.', 'success');
@@ -403,7 +411,7 @@
                         flash('Push failed: ' + (data.detail || 'Unknown error'), 'error');
                     }
                 })
-                .catch(function(err) { flash('Push error: ' + err.message, 'error'); })
+                .catch(function(err) { flash('Push failed: ' + err.message, 'error'); })
                 .finally(function() {
                     pushBtn.disabled = false;
                     pushBtn.textContent = 'Push to Seismo';
