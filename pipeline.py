@@ -438,8 +438,17 @@ def _train_transformer() -> dict:
     }
 
 
+MAX_ONTHEFLY_EMBEDDINGS = 10
+
+
 def _score_transformer(entries: List[dict], model_info: dict) -> List[dict]:
-    """Score entries using cached embeddings + LogReg classifier."""
+    """Score entries using cached embeddings + LogReg classifier.
+
+    On-the-fly embedding computation is capped at MAX_ONTHEFLY_EMBEDDINGS so
+    that page loads stay fast.  Entries beyond the cap are silently omitted
+    from results -- callers already handle partial score lists.  The sync
+    path (_compute_pending_embeddings) handles bulk embedding computation.
+    """
     model_path = model_info.get("model_path")
     if not model_path or not Path(model_path).exists():
         return []
@@ -471,37 +480,55 @@ def _score_transformer(entries: List[dict], model_info: dict) -> List[dict]:
             to_compute.append(entry)
             to_compute_indices.append(i)
 
-    # Compute missing embeddings
+    # Compute missing embeddings -- capped to avoid blocking page loads.
+    # When the model was just changed, hundreds of entries may lack embeddings;
+    # computing them all here would hang the UI.  The sync path handles bulk
+    # computation; here we only do a small batch for immediate scoring.
     if to_compute:
-        new_emb_bytes = embed_entries(to_compute)
-        new_emb_arrays = [bytes_to_embedding(b, embedding_dim) for b in new_emb_bytes]
-        updates = []
-        for entry, eb in zip(to_compute, new_emb_bytes):
-            updates.append((eb, entry["entry_type"], entry["entry_id"]))
-        db.store_embeddings_batch(updates)
-        for idx, emb in zip(to_compute_indices, new_emb_arrays):
-            embeddings.append((idx, emb))
+        if len(to_compute) > MAX_ONTHEFLY_EMBEDDINGS:
+            logger.info(
+                "Skipping on-the-fly embedding for %d entries (cap=%d). "
+                "Run sync to compute pending embeddings.",
+                len(to_compute), MAX_ONTHEFLY_EMBEDDINGS,
+            )
+            to_compute = to_compute[:MAX_ONTHEFLY_EMBEDDINGS]
+            to_compute_indices = to_compute_indices[:MAX_ONTHEFLY_EMBEDDINGS]
 
-    # Sort by original index
-    embeddings.sort(key=lambda x: x[0])
-    X = np.array([emb for _, emb in embeddings])
+        try:
+            new_emb_bytes = embed_entries(to_compute)
+            new_emb_arrays = [bytes_to_embedding(b, embedding_dim) for b in new_emb_bytes]
+            updates = []
+            for entry, eb in zip(to_compute, new_emb_bytes):
+                updates.append((eb, entry["entry_type"], entry["entry_id"]))
+            db.store_embeddings_batch(updates)
+            for idx, emb in zip(to_compute_indices, new_emb_arrays):
+                embeddings.append((idx, emb))
+        except Exception as e:
+            logger.warning("On-the-fly embedding failed (model loading?): %s", e)
 
-    if len(X) == 0:
+    if not embeddings:
         return []
+
+    # Sort by original index and build feature matrix
+    embeddings.sort(key=lambda x: x[0])
+    scored_indices = [idx for idx, _ in embeddings]
+    X = np.array([emb for _, emb in embeddings])
 
     predictions = clf.predict(X)
     probabilities = clf.predict_proba(X)
     class_names = clf.classes_.tolist()
 
+    # Build results only for entries that had embeddings
     results = []
-    for i, entry in enumerate(entries):
-        probs = dict(zip(class_names, probabilities[i].tolist()))
+    for j, orig_idx in enumerate(scored_indices):
+        entry = entries[orig_idx]
+        probs = dict(zip(class_names, probabilities[j].tolist()))
         composite = sum(probs.get(c, 0) * CLASS_WEIGHT_MAP.get(c, 0) for c in class_names)
         results.append({
             "entry_type": entry["entry_type"],
             "entry_id": entry["entry_id"],
             "relevance_score": round(composite, 4),
-            "predicted_label": predictions[i],
+            "predicted_label": predictions[j],
             "probabilities": {k: round(v, 4) for k, v in probs.items()},
         })
 
