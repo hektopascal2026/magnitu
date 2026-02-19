@@ -395,13 +395,20 @@ body {
     }
 
     function pushLabel(entryType, entryId, label, reasoning) {
+        var now = new Date();
+        var ts = now.getFullYear() + '-' +
+            String(now.getMonth() + 1).padStart(2, '0') + '-' +
+            String(now.getDate()).padStart(2, '0') + ' ' +
+            String(now.getHours()).padStart(2, '0') + ':' +
+            String(now.getMinutes()).padStart(2, '0') + ':' +
+            String(now.getSeconds()).padStart(2, '0');
         return seismoRequest('POST', 'magnitu_labels', {
             labels: [{
                 entry_type: entryType,
                 entry_id: entryId,
                 label: label,
                 reasoning: reasoning || '',
-                labeled_at: new Date().toISOString()
+                labeled_at: ts
             }]
         });
     }
