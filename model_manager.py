@@ -8,7 +8,7 @@ A .magnitu file is a zip archive containing:
   - labels.json    — all labeled entries with text + reasoning (for retraining)
 
 Magnitu 2: transformer models export just the classifier head (tiny, ~KB).
-The base transformer model (distilroberta-base) is downloaded from HuggingFace
+The base transformer model (xlm-roberta-base) is downloaded from HuggingFace
 on import.  Embeddings are recomputed from the base model after import.
 """
 import json
@@ -104,7 +104,7 @@ def export_model(output_path: str = None) -> str:
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
         "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
-        "transformer_model_name": config.get("transformer_model_name", "distilroberta-base"),
+        "transformer_model_name": config.get("transformer_model_name", "xlm-roberta-base"),
         "metrics": {},
         "version_chain": version_chain,
     }
@@ -188,7 +188,7 @@ def export_as_new_model(new_name: str, new_description: str, output_path: str = 
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
         "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
-        "transformer_model_name": config.get("transformer_model_name", "distilroberta-base"),
+        "transformer_model_name": config.get("transformer_model_name", "xlm-roberta-base"),
         "metrics": {},
         "version_chain": version_chain,
         # Immutable parent lineage — cannot be changed or suppressed

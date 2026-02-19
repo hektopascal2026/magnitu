@@ -63,7 +63,7 @@ def _get_embedder():
     from transformers import AutoTokenizer, AutoModel
 
     config = get_config()
-    model_name = config.get("transformer_model_name", "distilroberta-base")
+    model_name = config.get("transformer_model_name", "xlm-roberta-base")
 
     logger.info("Loading transformer model: %s", model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
