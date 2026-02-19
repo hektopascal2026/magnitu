@@ -153,17 +153,31 @@ def invalidate_embedder_cache():
     _embedder = None
 
 
+CONTENT_CAP = 500
+
+
+def _build_entry_text(entry: dict) -> str:
+    """
+    Build text for embedding/scoring from an entry's fields.
+
+    Title is repeated so it dominates the [CLS] embedding even for entries
+    with long content.  Content is capped at CONTENT_CAP chars so a 3000-
+    char government press release doesn't push the title out of the
+    tokenizer's 256-token window.  This makes embeddings comparable across
+    sources that provide wildly different amounts of text (e.g. a Bund
+    Medienmitteilung vs. an SRF teaser).
+    """
+    title = entry.get("title", "").strip()
+    desc = entry.get("description", "").strip()
+    content = entry.get("content", "").strip()[:CONTENT_CAP]
+
+    text = "\n".join(part for part in [title, title, desc, content] if part)
+    return text if text else "(empty)"
+
+
 def embed_entries(entries: List[dict]) -> List[bytes]:
     """Compute embeddings for a list of entry dicts. Returns list of bytes."""
-    texts = []
-    for e in entries:
-        text = "{} {} {}".format(
-            e.get("title", ""), e.get("description", ""), e.get("content", "")
-        ).strip()
-        if not text:
-            text = "(empty)"
-        texts.append(text)
-
+    texts = [_build_entry_text(e) for e in entries]
     embeddings = compute_embeddings(texts)
     return [embedding_to_bytes(emb) for emb in embeddings]
 
@@ -176,9 +190,7 @@ def _prepare_text(entries: List[dict]) -> pd.DataFrame:
     """Convert entries into a DataFrame with text and structured features."""
     rows = []
     for e in entries:
-        text = "{} {} {}".format(
-            e.get("title", ""), e.get("description", ""), e.get("content", "")
-        ).strip()
+        text = _build_entry_text(e)
         rows.append({
             "text": text,
             "source_type": e.get("source_type", "unknown"),
