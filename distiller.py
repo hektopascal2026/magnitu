@@ -84,6 +84,11 @@ def distill_recipe(top_n: Optional[int] = None):
     # Boost keywords from user reasoning annotations
     keywords = _boost_from_reasoning(keywords)
 
+    # Normalize weights so accumulated scores stay in a reasonable range for
+    # softmax regardless of text length — prevents long entries from getting
+    # extreme scores while short entries cluster near 0.5
+    keywords, source_weights = _normalize_weights(keywords, source_weights)
+
     # Build recipe
     recipe = {
         "version": model_info["version"],
@@ -116,6 +121,87 @@ def distill_recipe(top_n: Optional[int] = None):
     conn.close()
 
     return recipe
+
+
+def _normalize_weights(keywords: dict, source_weights: dict) -> tuple:
+    """
+    Scale recipe weights so that the median accumulated class_score across all
+    entries lands near 1.0 before softmax.  This prevents long entries (many
+    keyword matches) from producing extremely peaked softmax distributions
+    while short entries get near-uniform scores.
+
+    Without this, a 500-token government press release can score 100 while
+    a 50-token news teaser about the same topic scores 5.
+    """
+    all_entries = db.get_all_entries()
+    if not all_entries or not keywords:
+        return keywords, source_weights
+
+    classes = ["investigation_lead", "important", "background", "noise"]
+    magnitudes = []
+
+    for entry in all_entries:
+        text = "{} {} {}".format(
+            entry.get("title", ""),
+            entry.get("description", ""),
+            entry.get("content", ""),
+        ).lower()
+        tokens = text.split()
+        bigrams = ["{} {}".format(tokens[j], tokens[j + 1])
+                   for j in range(len(tokens) - 1)]
+        all_tokens = tokens + bigrams
+
+        class_scores = {c: 0.0 for c in classes}
+        for token in all_tokens:
+            if token in keywords:
+                for cls, wt in keywords[token].items():
+                    if cls in class_scores:
+                        class_scores[cls] += wt
+
+        src = entry.get("source_type", "")
+        if src in source_weights:
+            for cls, wt in source_weights[src].items():
+                if cls in class_scores:
+                    class_scores[cls] += wt
+
+        mag = max(abs(v) for v in class_scores.values()) if class_scores else 0
+        if mag > 0:
+            magnitudes.append(mag)
+
+    if not magnitudes:
+        return keywords, source_weights
+
+    magnitudes.sort()
+    median_mag = magnitudes[len(magnitudes) // 2]
+
+    TARGET_MAGNITUDE = 2.0
+    if median_mag < 0.01:
+        return keywords, source_weights
+
+    scale = TARGET_MAGNITUDE / median_mag
+    if 0.5 <= scale <= 2.0:
+        return keywords, source_weights
+
+    logger.info(
+        "Recipe normalization: median magnitude %.2f, scaling weights by %.3f",
+        median_mag, scale,
+    )
+
+    normalized_kw = {}
+    for word, class_weights in keywords.items():
+        normalized_kw[word] = {
+            cls: round(wt * scale, 4)
+            for cls, wt in class_weights.items()
+        }
+
+    normalized_sw = {}
+    for src, class_weights in source_weights.items():
+        normalized_sw[src] = {
+            cls: round(wt * scale, 4)
+            for cls, wt in class_weights.items()
+        }
+
+    return normalized_kw, normalized_sw
 
 
 def _distill_from_transformer(top_n: int) -> dict:
