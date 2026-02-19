@@ -307,8 +307,10 @@ def import_model(file_path: str) -> dict:
             if local_version == 0:
                 # No local model — always load
                 should_load_model = True
-            elif imported_version > local_version:
-                # Imported is newer — load it
+            elif imported_version >= local_version:
+                # Imported is same or newer — load it.  Same-version import
+                # covers the rename/re-export workflow where user exports,
+                # changes identity, and imports back.
                 should_load_model = True
 
         if should_load_model and model_file.exists():
@@ -351,10 +353,12 @@ def import_model(file_path: str) -> dict:
 
             result["model_loaded"] = True
 
-        # Set or update model profile
+        # Set or update model profile.
+        # When a model is loaded from the import, always adopt the imported
+        # identity — the user explicitly chose this .magnitu file (covers
+        # rename/re-export, fresh installs, and model transfers).
         current_profile = get_profile()
-        if not current_profile:
-            # No profile yet — adopt the imported one
+        if not current_profile or result["model_loaded"]:
             db.set_model_profile(
                 model_name=imported_name,
                 model_uuid=imported_uuid,
@@ -362,7 +366,6 @@ def import_model(file_path: str) -> dict:
                 created_at=manifest.get("created_at", ""),
             )
         elif local_version == 0 and pre_import_label_count == 0:
-            # Profile exists but is empty (just created, no work done) — adopt imported identity
             db.set_model_profile(
                 model_name=imported_name,
                 model_uuid=imported_uuid,
@@ -377,7 +380,7 @@ def import_model(file_path: str) -> dict:
             parts.append(f"{new_labels} labels imported")
         if result["model_loaded"]:
             parts.append(f"model v{imported_version} loaded")
-        elif imported_version and imported_version <= local_version:
+        elif imported_version and imported_version < local_version:
             parts.append(f"model v{imported_version} skipped (local v{local_version} is newer)")
         if not parts:
             parts.append("no new data")
