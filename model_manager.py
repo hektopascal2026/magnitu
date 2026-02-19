@@ -353,35 +353,32 @@ def import_model(file_path: str) -> dict:
 
             result["model_loaded"] = True
 
-        # Set or update model profile.
-        # When a model is loaded from the import, always adopt the imported
-        # identity — the user explicitly chose this .magnitu file (covers
-        # rename/re-export, fresh installs, and model transfers).
-        current_profile = get_profile()
-        if not current_profile or result["model_loaded"]:
-            db.set_model_profile(
-                model_name=imported_name,
-                model_uuid=imported_uuid,
-                description=imported_description,
-                created_at=manifest.get("created_at", ""),
-            )
-        elif local_version == 0 and pre_import_label_count == 0:
-            db.set_model_profile(
-                model_name=imported_name,
-                model_uuid=imported_uuid,
-                description=imported_description,
-                created_at=manifest.get("created_at", ""),
-            )
+        # Always adopt the imported profile.  The user explicitly chose to
+        # import this .magnitu file — that means they want its identity
+        # (name, description) regardless of whether the trained model inside
+        # is newer or older than the local one.  This is the rename workflow:
+        # export as "pascal-two", import back, keep working.
+        db.set_model_profile(
+            model_name=imported_name,
+            model_uuid=imported_uuid,
+            description=imported_description,
+            created_at=manifest.get("created_at", ""),
+        )
+        result["profile_updated"] = True
 
         # Build message
         new_labels = result["labels"]["imported"] + result["labels"]["updated"]
         parts = []
+        parts.append(f"profile set to \"{imported_name}\"")
         if new_labels:
             parts.append(f"{new_labels} labels imported")
         if result["model_loaded"]:
             parts.append(f"model v{imported_version} loaded")
         elif imported_version and imported_version < local_version:
-            parts.append(f"model v{imported_version} skipped (local v{local_version} is newer)")
+            parts.append(
+                f"keeping local model v{local_version} "
+                f"(imported v{imported_version} is older)"
+            )
         if not parts:
             parts.append("no new data")
 
