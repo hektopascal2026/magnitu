@@ -307,6 +307,7 @@ body {
     var STORAGE_KEY_APIKEY = 'magnitu_label_api_key';
     var STORAGE_KEY_LABELED = 'magnitu_label_done_ids';
     var STORAGE_KEY_COUNT = 'magnitu_label_session_count';
+    var STORAGE_KEY_QUEUE = 'magnitu_label_retry_queue';
 
     function getConfig() {
         return {
@@ -344,6 +345,51 @@ body {
         var c = getSessionCount() + 1;
         localStorage.setItem(STORAGE_KEY_COUNT, '' + c);
         return c;
+    }
+
+    // ── Retry queue: stores full label data for failed pushes ──
+    function getRetryQueue() {
+        try { return JSON.parse(localStorage.getItem(STORAGE_KEY_QUEUE) || '[]'); }
+        catch(e) { return []; }
+    }
+
+    function addToRetryQueue(entryType, entryId, label, reasoning, labeledAt) {
+        var queue = getRetryQueue();
+        // Replace any existing entry for the same item
+        queue = queue.filter(function(q) {
+            return !(q.entry_type === entryType && q.entry_id === entryId);
+        });
+        queue.push({
+            entry_type: entryType,
+            entry_id: entryId,
+            label: label,
+            reasoning: reasoning || '',
+            labeled_at: labeledAt
+        });
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
+        updateStats();
+    }
+
+    function removeFromRetryQueue(entryType, entryId) {
+        var queue = getRetryQueue();
+        queue = queue.filter(function(q) {
+            return !(q.entry_type === entryType && q.entry_id === entryId);
+        });
+        localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(queue));
+        updateStats();
+    }
+
+    function flushRetryQueue() {
+        var queue = getRetryQueue();
+        if (queue.length === 0) return Promise.resolve(0);
+
+        return seismoRequest('POST', 'magnitu_labels', { labels: queue })
+            .then(function(result) {
+                var flushed = queue.length;
+                localStorage.setItem(STORAGE_KEY_QUEUE, '[]');
+                updateStats();
+                return flushed;
+            });
     }
 
     // ── Flash messages ──
@@ -430,8 +476,12 @@ body {
     function updateStats() {
         var count = getSessionCount();
         var total = getLabeledIds().length;
-        document.getElementById('stats').innerHTML =
-            'Session: <strong>' + count + '</strong> &middot; Total: <strong>' + total + '</strong>';
+        var pending = getRetryQueue().length;
+        var html = 'Session: <strong>' + count + '</strong> &middot; Total: <strong>' + total + '</strong>';
+        if (pending > 0) {
+            html += ' &middot; <span style="color:#FF2C2C;font-weight:700;" title="' + pending + ' labels waiting to sync">' + pending + ' pending</span>';
+        }
+        document.getElementById('stats').innerHTML = html;
     }
 
     // ── Render: Setup screen ──
@@ -531,27 +581,32 @@ body {
             var entryId = parseInt(card.dataset.entryId, 10);
             var label = btn.dataset.label;
             var reasoning = card.querySelector('.reasoning-input').value.trim();
+            var now = new Date();
+            var ts = now.getFullYear() + '-' +
+                String(now.getMonth() + 1).padStart(2, '0') + '-' +
+                String(now.getDate()).padStart(2, '0') + ' ' +
+                String(now.getHours()).padStart(2, '0') + ':' +
+                String(now.getMinutes()).padStart(2, '0') + ':' +
+                String(now.getSeconds()).padStart(2, '0');
 
-            // Optimistic UI: fade the card immediately
             card.classList.add('labeled');
             btn.classList.add('active');
             markLabeled(entryType, entryId);
             var count = incSessionCount();
             updateStats();
 
-            // Scroll to next visible card
             var next = card.nextElementSibling;
             if (next && !next.classList.contains('labeled')) {
                 next.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
 
-            // Push to Seismo
             pushLabel(entryType, entryId, label, reasoning)
                 .then(function() {
-                    // Silently succeeded
+                    removeFromRetryQueue(entryType, entryId);
                 })
                 .catch(function(err) {
-                    flash('Failed to push label: ' + err.message + '. Saved locally.', 'error');
+                    addToRetryQueue(entryType, entryId, label, reasoning, ts);
+                    flash('Push failed (' + err.message + '). Label queued — will retry automatically.', 'error');
                 });
 
             // If all cards in this batch are labeled, load more
@@ -575,10 +630,20 @@ body {
                     return;
                 }
 
-                // Smoke-test: verify label endpoint works before user starts labeling
-                verifyLabelEndpoint().catch(function(err) {
-                    flash('Warning: label push endpoint is broken (' + err.message + '). Labels will only save locally.', 'error');
-                });
+                // Smoke-test endpoint, then flush any pending labels from a previous session
+                verifyLabelEndpoint()
+                    .then(function() {
+                        return flushRetryQueue();
+                    })
+                    .then(function(flushed) {
+                        if (flushed > 0) flash(flushed + ' pending label(s) synced to Seismo.', 'success');
+                    })
+                    .catch(function(err) {
+                        var pending = getRetryQueue().length;
+                        var msg = 'Label endpoint unreachable (' + err.message + ').';
+                        if (pending > 0) msg += ' ' + pending + ' label(s) still pending.';
+                        flash(msg, 'error');
+                    });
 
                 // Shuffle so different users get different order
                 for (var i = entries.length - 1; i > 0; i--) {
