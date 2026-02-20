@@ -451,11 +451,18 @@ async def sync_push():
             + "Try syncing again to compute embeddings, then retrain."
         )
 
-    for i, entry in enumerate(all_entries):
+    score_by_key = {
+        (s["entry_type"], s["entry_id"]): s for s in scores
+    }
+    for entry in all_entries:
+        key = (entry["entry_type"], entry["entry_id"])
+        score = score_by_key.get(key)
+        if not score:
+            continue
         try:
             exp = explainer.explain_entry(entry)
-            if exp and i < len(scores):
-                scores[i]["explanation"] = {
+            if exp:
+                score["explanation"] = {
                     "top_features": exp["top_features"],
                     "confidence": exp["confidence"],
                     "prediction": exp["prediction"],

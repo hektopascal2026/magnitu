@@ -1,14 +1,13 @@
 """
 Explainability module: per-entry explanations and global keyword rankings.
 
-Magnitu 2: for transformer models, provides class probabilities and top
-contributing embedding dimensions.  Detailed token-level attribution is
-not a priority — the focus is on useful scores.
+Magnitu 2: for transformer models, provides class probability breakdowns.
+For TF-IDF models, provides keyword-level feature attribution.
 """
 import numpy as np
 import joblib
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 import db
 from config import get_config
@@ -16,7 +15,6 @@ from pipeline import (
     load_active_model,
     _prepare_text,
     get_feature_importance,
-    score_entries,
     bytes_to_embedding,
     embed_entries,
     CLASS_WEIGHT_MAP,

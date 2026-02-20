@@ -4,9 +4,8 @@ Stores cached entries, user labels, model history, and sync log.
 """
 import sqlite3
 import json
-from typing import Optional, List, Dict
+from typing import Optional, List
 from datetime import datetime
-from pathlib import Path
 from config import DB_PATH
 
 
@@ -317,23 +316,6 @@ def get_label_distribution() -> dict:
     return {r["label"]: r["count"] for r in rows}
 
 
-def get_labels_since_model(model_version: int) -> int:
-    """Count labels added since the last model was trained."""
-    conn = get_db()
-    # Get the trained_at of the given model version
-    model_row = conn.execute(
-        "SELECT trained_at FROM models WHERE version = ?", (model_version,)
-    ).fetchone()
-    if not model_row:
-        count = conn.execute("SELECT COUNT(*) FROM labels").fetchone()[0]
-    else:
-        count = conn.execute(
-            "SELECT COUNT(*) FROM labels WHERE updated_at > ?", (model_row["trained_at"],)
-        ).fetchone()[0]
-    conn.close()
-    return count
-
-
 # ─── Embedding operations (Magnitu 2) ───
 
 def store_embedding(entry_type: str, entry_id: int, embedding_bytes: bytes):
@@ -399,20 +381,21 @@ def invalidate_all_embeddings():
 # ─── Model operations ───
 
 def save_model_record(version: int, accuracy: float, f1: float, precision: float,
-                      recall: float, label_count: int, label_dist: dict,
+                      recall: float, label_count: int,
                       feature_count: int, model_path: str, recipe_path: str = "",
-                      recipe_quality: float = 0.0) -> int:
+                      recipe_quality: float = 0.0,
+                      architecture: str = "tfidf") -> int:
     """Save a model training record and set it as active."""
     conn = get_db()
-    # Deactivate all existing models
     conn.execute("UPDATE models SET is_active = 0")
     conn.execute("""
         INSERT INTO models (version, accuracy, f1_score, precision_score, recall_score,
-                           label_count, label_distribution, feature_count, model_path,
-                           recipe_path, recipe_quality, is_active)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+                           label_count, feature_count, model_path,
+                           recipe_path, recipe_quality, is_active, architecture)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     """, (version, accuracy, f1, precision, recall, label_count,
-          json.dumps(label_dist), feature_count, model_path, recipe_path, recipe_quality))
+          feature_count, model_path, recipe_path, recipe_quality,
+          architecture))
     model_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
     conn.commit()
     conn.close()

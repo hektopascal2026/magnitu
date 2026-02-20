@@ -3,33 +3,34 @@ ML Pipeline for Magnitu 2.
 
 Two architectures behind the same interface:
 - "tfidf":       TF-IDF + Logistic Regression (original Magnitu 1)
-- "transformer": Cached DistilRoBERTa embeddings + Logistic Regression (Magnitu 2)
+- "transformer": Cached XLM-RoBERTa embeddings + MLP classifier (Magnitu 2)
 
-The transformer path computes embeddings once at sync time and stores them in
-the DB.  Training and scoring use these cached embeddings with a lightweight
-LogReg classifier — so labeling stays snappy.  The TF-IDF path is kept as a
-fallback and is used by the recipe distiller for knowledge distillation.
+The transformer path computes mean-pooled embeddings once at sync time and
+stores them in the DB.  Training and scoring use these cached embeddings with
+a lightweight MLP classifier — so labeling stays snappy.  The TF-IDF path is
+kept as a fallback and is used by the recipe distiller for knowledge
+distillation.
 """
 import json
 import logging
-import struct
 import joblib
 import numpy as np
 import pandas as pd
-from datetime import datetime
 from pathlib import Path
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     accuracy_score, f1_score, precision_score, recall_score,
     classification_report,
 )
 
-from typing import Optional, List, Dict
+from typing import Optional, List
 
 import db
 from config import MODELS_DIR, get_config
@@ -98,9 +99,13 @@ def release_embedder():
 
 def compute_embeddings(texts: List[str], batch_size: int = 8) -> np.ndarray:
     """
-    Compute [CLS] embeddings for a list of texts using the transformer.
+    Compute mean-pooled embeddings for a list of texts using the transformer.
     Returns ndarray of shape (len(texts), embedding_dim).
     Batch size kept small (8) and max_length capped at 256 to limit memory.
+
+    Mean pooling averages all non-padding token embeddings, producing better
+    representations than [CLS] alone for models like XLM-RoBERTa that weren't
+    trained with a dedicated [CLS] objective.
     """
     import torch
 
@@ -123,9 +128,12 @@ def compute_embeddings(texts: List[str], batch_size: int = 8) -> np.ndarray:
         with torch.no_grad():
             outputs = model(**encoded)
 
-        # Use [CLS] token embedding (first token), convert back to float32
-        cls_embeddings = outputs.last_hidden_state[:, 0, :].float().cpu().numpy()
-        all_embeddings.append(cls_embeddings)
+        token_embeddings = outputs.last_hidden_state.float()
+        attention_mask = encoded["attention_mask"].unsqueeze(-1).float()
+        summed = (token_embeddings * attention_mask).sum(dim=1)
+        counts = attention_mask.sum(dim=1).clamp(min=1e-9)
+        mean_pooled = (summed / counts).cpu().numpy()
+        all_embeddings.append(mean_pooled)
 
     return np.vstack(all_embeddings) if all_embeddings else np.array([])
 
@@ -295,8 +303,27 @@ def get_feature_importance() -> dict:
 #  Transformer training + scoring (Magnitu 2)
 # ═══════════════════════════════════════════════════════════════════
 
+class _LabelDecodingClassifier:
+    """Wraps a Pipeline that was trained on integer-encoded labels and
+    translates predictions back to the original string labels.  Exposes
+    the same interface as sklearn classifiers (predict, predict_proba,
+    classes_) so scoring and explainer code works unchanged."""
+
+    def __init__(self, pipeline, label_encoder):
+        self._pipeline = pipeline
+        self._le = label_encoder
+        self.classes_ = label_encoder.classes_
+
+    def predict(self, X):
+        encoded = self._pipeline.predict(X)
+        return self._le.inverse_transform(encoded)
+
+    def predict_proba(self, X):
+        return self._pipeline.predict_proba(X)
+
+
 def _train_transformer() -> dict:
-    """Train a LogReg classifier on cached transformer embeddings."""
+    """Train an MLP classifier on cached transformer embeddings."""
     config = get_config()
     min_labels = config.get("min_labels_to_train", 20)
     embedding_dim = config.get("embedding_dim", 768)
@@ -370,17 +397,51 @@ def _train_transformer() -> dict:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, stratify=y, random_state=42
         )
-        split_note = "80/{} train/test split".format(int(test_size * 100))
+        split_note = "{}/{} train/test split".format(int((1 - test_size) * 100), int(test_size * 100))
 
-    # Train LogReg on embeddings
-    clf = LogisticRegression(
-        C=1.0,
-        class_weight="balanced",
-        max_iter=1000,
-        solver="lbfgs",
-        random_state=42,
-    )
-    clf.fit(X_train, y_train)
+    # Oversample minority classes so the MLP sees equal representation
+    # (MLPClassifier doesn't support class_weight or sample_weight)
+    from collections import Counter
+    train_counts = Counter(y_train)
+    max_count = max(train_counts.values())
+    rng = np.random.RandomState(42)
+
+    X_balanced = list(X_train)
+    y_balanced = list(y_train)
+    for cls, count in train_counts.items():
+        if count < max_count:
+            cls_indices = [i for i, label in enumerate(y_train) if label == cls]
+            extra = rng.choice(cls_indices, size=max_count - count, replace=True)
+            for idx in extra:
+                X_balanced.append(X_train[idx])
+                y_balanced.append(y_train[idx])
+    X_train_bal = np.array(X_balanced)
+    y_train_bal = y_balanced
+
+    # Encode string labels to integers for MLP (early_stopping + string labels
+    # triggers a numpy isnan bug in some sklearn versions)
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    le.fit(CLASSES)
+    y_train_enc = le.transform(y_train_bal)
+
+    clf_pipeline = Pipeline([
+        ("scaler", StandardScaler()),
+        ("mlp", MLPClassifier(
+            hidden_layer_sizes=(256,),
+            activation="relu",
+            max_iter=500,
+            early_stopping=True,
+            validation_fraction=0.15,
+            n_iter_no_change=15,
+            random_state=42,
+        )),
+    ])
+    clf_pipeline.fit(X_train_bal, y_train_enc)
+
+    # Wrap in a thin adapter that decodes integer predictions back to strings
+    # so the rest of the codebase (scoring, explainer) works unchanged
+    clf = _LabelDecodingClassifier(clf_pipeline, le)
 
     # Evaluate
     y_pred = clf.predict(X_test)
@@ -404,19 +465,10 @@ def _train_transformer() -> dict:
         precision=prec,
         recall=rec,
         label_count=len(labeled),
-        label_dist=label_dist,
         feature_count=X.shape[1],
         model_path=model_path,
+        architecture="transformer",
     )
-
-    # Update architecture in the model record
-    conn = db.get_db()
-    conn.execute(
-        "UPDATE models SET architecture = ? WHERE version = ?",
-        ("transformer", version)
-    )
-    conn.commit()
-    conn.close()
 
     report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
     report = json.loads(json.dumps(report, default=float))
@@ -442,7 +494,7 @@ MAX_ONTHEFLY_EMBEDDINGS = 10
 
 
 def _score_transformer(entries: List[dict], model_info: dict) -> List[dict]:
-    """Score entries using cached embeddings + LogReg classifier.
+    """Score entries using cached embeddings + MLP classifier.
 
     On-the-fly embedding computation is capped at MAX_ONTHEFLY_EMBEDDINGS so
     that page loads stay fast.  Entries beyond the cap are silently omitted
@@ -570,7 +622,7 @@ def _train_tfidf() -> dict:
         X_train, X_test, y_train, y_test = train_test_split(
             df, labels, test_size=test_size, stratify=labels, random_state=42
         )
-        split_note = "80/{} train/test split".format(int(test_size * 100))
+        split_note = "{}/{} train/test split".format(int((1 - test_size) * 100), int(test_size * 100))
 
     pipeline = build_tfidf_pipeline()
 
@@ -614,19 +666,10 @@ def _train_tfidf() -> dict:
         precision=prec,
         recall=rec,
         label_count=len(labeled),
-        label_dist=label_dist,
         feature_count=feature_count,
         model_path=model_path,
+        architecture="tfidf",
     )
-
-    # Mark architecture
-    conn = db.get_db()
-    conn.execute(
-        "UPDATE models SET architecture = ? WHERE version = ?",
-        ("tfidf", version)
-    )
-    conn.commit()
-    conn.close()
 
     report = classification_report(y_test, y_pred, zero_division=0, output_dict=True)
     report = json.loads(json.dumps(report, default=float))
@@ -740,19 +783,34 @@ def train_tfidf_student() -> Optional[Pipeline]:
     if not scores:
         return None
 
-    # Build training data: entry text → transformer's predicted label
-    df = _prepare_text(all_entries)
-    teacher_labels = [s["predicted_label"] for s in scores]
+    # Build a lookup of transformer predictions keyed by (entry_type, entry_id)
+    score_map = {
+        (s["entry_type"], s["entry_id"]): s["predicted_label"]
+        for s in scores
+    }
 
-    # Augment with human labels (they take precedence)
+    # Human labels override transformer predictions
     human_labels = {
         (lbl["entry_type"], lbl["entry_id"]): lbl["label"]
         for lbl in db.get_all_labels()
     }
-    for i, entry in enumerate(all_entries):
+
+    # Only include entries that have either a score or a human label
+    scored_entries = []
+    teacher_labels = []
+    for entry in all_entries:
         key = (entry["entry_type"], entry["entry_id"])
         if key in human_labels:
-            teacher_labels[i] = human_labels[key]
+            scored_entries.append(entry)
+            teacher_labels.append(human_labels[key])
+        elif key in score_map:
+            scored_entries.append(entry)
+            teacher_labels.append(score_map[key])
+
+    if len(scored_entries) < 20:
+        return None
+
+    df = _prepare_text(scored_entries)
 
     # Build and train the student pipeline
     student = build_tfidf_pipeline()

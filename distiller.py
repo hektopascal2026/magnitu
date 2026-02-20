@@ -179,8 +179,6 @@ def _normalize_weights(keywords: dict, source_weights: dict) -> tuple:
         return keywords, source_weights
 
     scale = TARGET_MAGNITUDE / median_mag
-    if 0.5 <= scale <= 2.0:
-        return keywords, source_weights
 
     logger.info(
         "Recipe normalization: median magnitude %.2f, scaling weights by %.3f",
@@ -291,21 +289,33 @@ def evaluate_recipe_quality(recipe: dict, sample_size: int = 100) -> float:
     if not full_scores:
         return 0.0
 
-    # Get recipe-based scores (simplified scoring matching seismo's PHP logic)
-    recipe_scores = []
+    # Build lookup of model scores keyed by (entry_type, entry_id)
+    model_score_map = {
+        (s["entry_type"], s["entry_id"]): s["relevance_score"]
+        for s in full_scores
+    }
+
+    # Compute recipe-based scores (matching Seismo's PHP logic)
     kw = recipe.get("keywords", {})
     source_weights_map = recipe.get("source_weights", {})
     classes = recipe.get("classes", ["investigation_lead", "important", "background", "noise"])
     class_wts = recipe.get("class_weights", [1.0, 0.66, 0.33, 0.0])
 
+    paired_model = []
+    paired_recipe = []
+
     for entry in entries:
+        key = (entry["entry_type"], entry["entry_id"])
+        if key not in model_score_map:
+            continue
+
         text = "{} {} {}".format(
             entry.get("title", ""),
             entry.get("description", ""),
             entry.get("content", ""),
         ).lower()
         tokens = text.split()
-        bigrams = ["{} {}".format(tokens[i], tokens[i + 1]) for i in range(len(tokens) - 1)]
+        bigrams = ["{} {}".format(tokens[j], tokens[j + 1]) for j in range(len(tokens) - 1)]
         all_tokens = tokens + bigrams
 
         class_scores = {c: 0.0 for c in classes}
@@ -321,7 +331,6 @@ def evaluate_recipe_quality(recipe: dict, sample_size: int = 100) -> float:
                 if cls in class_scores:
                     class_scores[cls] += wt
 
-        # Softmax
         max_s = max(class_scores.values()) if class_scores else 0
         exp_scores = {c: np.exp(s - max_s) for c, s in class_scores.items()}
         exp_sum = sum(exp_scores.values())
@@ -330,15 +339,14 @@ def evaluate_recipe_quality(recipe: dict, sample_size: int = 100) -> float:
             for c in classes
         }
 
-        composite = sum(probs.get(c, 0) * class_wts[i] for i, c in enumerate(classes))
-        recipe_scores.append(composite)
+        composite = sum(probs.get(c, 0) * class_wts[idx] for idx, c in enumerate(classes))
+        paired_model.append(model_score_map[key])
+        paired_recipe.append(composite)
 
-    full_vals = [s["relevance_score"] for s in full_scores[:len(recipe_scores)]]
-
-    if len(full_vals) < 2:
+    if len(paired_model) < 2:
         return 0.0
 
-    correlation = np.corrcoef(full_vals, recipe_scores[:len(full_vals)])[0, 1]
-    quality = max(0.0, float(correlation)) if not np.isnan(correlation) else 0.0
+    correlation = float(np.corrcoef(paired_model, paired_recipe)[0, 1])
+    quality = max(0.0, correlation) if not (correlation != correlation) else 0.0
 
     return round(quality, 4)

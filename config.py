@@ -50,5 +50,5 @@ def save_config(config: dict):
 
 
 def get_config() -> dict:
-    """Get current config (cached in module)."""
+    """Get current config. Re-reads from disk on every call."""
     return load_config()

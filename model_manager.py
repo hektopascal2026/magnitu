@@ -79,34 +79,25 @@ def _get_version_chain() -> list:
 
 # ─── Export ───
 
-def export_model(output_path: str = None) -> str:
-    """
-    Export current model as a .magnitu zip package.
-    Returns the path to the created file.
-    """
-    profile = get_profile()
-    if not profile:
-        raise ValueError("No model profile configured. Create one first.")
-
-    active_model = db.get_active_model()
-    version_chain = _get_version_chain()
-
+def _build_manifest(model_name: str, model_uuid: str, description: str,
+                    created_at: str, extra: Optional[dict] = None) -> dict:
+    """Build the manifest dict for a .magnitu export."""
     config = get_config()
+    active_model = db.get_active_model()
 
-    # Build manifest
     manifest = {
         "magnitu_version": VERSION,
-        "model_name": profile["model_name"],
-        "model_uuid": profile["model_uuid"],
-        "description": profile.get("description", ""),
-        "created_at": profile.get("created_at", ""),
+        "model_name": model_name,
+        "model_uuid": model_uuid,
+        "description": description,
+        "created_at": created_at,
         "exported_at": datetime.utcnow().isoformat(),
         "version": active_model["version"] if active_model else 0,
         "label_count": db.get_label_count(),
         "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
         "transformer_model_name": config.get("transformer_model_name", "xlm-roberta-base"),
         "metrics": {},
-        "version_chain": version_chain,
+        "version_chain": _get_version_chain(),
     }
 
     if active_model:
@@ -117,44 +108,64 @@ def export_model(output_path: str = None) -> str:
             "recall": active_model.get("recall_score", 0.0),
         }
 
-    # Export labels with entry data
+    if extra:
+        manifest.update(extra)
+
+    return manifest
+
+
+def _write_package(manifest: dict, output_path: str) -> str:
+    """Write manifest, labels, model, and recipe into a .magnitu zip."""
+    active_model = db.get_active_model()
     labels = db.export_labels()
 
-    # Default output path
-    if not output_path:
-        safe_name = profile["model_name"].replace(" ", "_").lower()
-        output_path = str(MODELS_DIR / f"{safe_name}.magnitu")
-
-    # Create zip
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
 
-        # Write manifest
         with open(tmp_dir / "manifest.json", "w") as f:
             json.dump(manifest, f, indent=2, ensure_ascii=False)
 
-        # Write labels
         with open(tmp_dir / "labels.json", "w") as f:
             json.dump(labels, f, ensure_ascii=False)
 
-        # Copy model.joblib if exists
         if active_model and active_model.get("model_path"):
             model_path = Path(active_model["model_path"])
             if model_path.exists():
                 shutil.copy2(str(model_path), str(tmp_dir / "model.joblib"))
 
-        # Copy recipe if exists
         if active_model and active_model.get("recipe_path"):
             recipe_path = Path(active_model["recipe_path"])
             if recipe_path.exists():
                 shutil.copy2(str(recipe_path), str(tmp_dir / "recipe.json"))
 
-        # Zip it
         with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for file_path in tmp_dir.iterdir():
                 zf.write(str(file_path), file_path.name)
 
     return output_path
+
+
+def export_model(output_path: str = None) -> str:
+    """
+    Export current model as a .magnitu zip package.
+    Returns the path to the created file.
+    """
+    profile = get_profile()
+    if not profile:
+        raise ValueError("No model profile configured. Create one first.")
+
+    manifest = _build_manifest(
+        model_name=profile["model_name"],
+        model_uuid=profile["model_uuid"],
+        description=profile.get("description", ""),
+        created_at=profile.get("created_at", ""),
+    )
+
+    if not output_path:
+        safe_name = profile["model_name"].replace(" ", "_").lower()
+        output_path = str(MODELS_DIR / f"{safe_name}.magnitu")
+
+    return _write_package(manifest, output_path)
 
 
 # ─── Export as New Model (fork) ───
@@ -173,75 +184,28 @@ def export_as_new_model(new_name: str, new_description: str, output_path: str = 
     if not new_name:
         raise ValueError("New model name is required.")
 
-    config = get_config()
     active_model = db.get_active_model()
-    version_chain = _get_version_chain()
-
-    # Build manifest with new identity but parent lineage
-    manifest = {
-        "magnitu_version": VERSION,
-        "model_name": new_name,
-        "model_uuid": uuid.uuid4().hex,
-        "description": new_description.strip(),
-        "created_at": datetime.utcnow().isoformat(),
-        "exported_at": datetime.utcnow().isoformat(),
-        "version": active_model["version"] if active_model else 0,
-        "label_count": db.get_label_count(),
-        "architecture": active_model.get("architecture", "tfidf") if active_model else config.get("model_architecture", "transformer"),
-        "transformer_model_name": config.get("transformer_model_name", "xlm-roberta-base"),
-        "metrics": {},
-        "version_chain": version_chain,
-        # Immutable parent lineage — cannot be changed or suppressed
-        "based_on": {
-            "model_name": parent_profile["model_name"],
-            "model_uuid": parent_profile["model_uuid"],
-            "description": parent_profile.get("description", ""),
-            "version_at_fork": active_model["version"] if active_model else 0,
-            "forked_at": datetime.utcnow().isoformat(),
+    manifest = _build_manifest(
+        model_name=new_name,
+        model_uuid=uuid.uuid4().hex,
+        description=new_description.strip(),
+        created_at=datetime.utcnow().isoformat(),
+        extra={
+            "based_on": {
+                "model_name": parent_profile["model_name"],
+                "model_uuid": parent_profile["model_uuid"],
+                "description": parent_profile.get("description", ""),
+                "version_at_fork": active_model["version"] if active_model else 0,
+                "forked_at": datetime.utcnow().isoformat(),
+            },
         },
-    }
+    )
 
-    if active_model:
-        manifest["metrics"] = {
-            "accuracy": active_model.get("accuracy", 0.0),
-            "f1": active_model.get("f1_score", 0.0),
-            "precision": active_model.get("precision_score", 0.0),
-            "recall": active_model.get("recall_score", 0.0),
-        }
-
-    # Export labels with entry data
-    labels = db.export_labels()
-
-    # Default output path
     if not output_path:
         safe_name = new_name.replace(" ", "_").lower()
         output_path = str(MODELS_DIR / f"{safe_name}.magnitu")
 
-    # Create zip
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-
-        with open(tmp_dir / "manifest.json", "w") as f:
-            json.dump(manifest, f, indent=2, ensure_ascii=False)
-
-        with open(tmp_dir / "labels.json", "w") as f:
-            json.dump(labels, f, ensure_ascii=False)
-
-        if active_model and active_model.get("model_path"):
-            model_path = Path(active_model["model_path"])
-            if model_path.exists():
-                shutil.copy2(str(model_path), str(tmp_dir / "model.joblib"))
-
-        if active_model and active_model.get("recipe_path"):
-            recipe_path = Path(active_model["recipe_path"])
-            if recipe_path.exists():
-                shutil.copy2(str(recipe_path), str(tmp_dir / "recipe.json"))
-
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zf:
-            for file_path in tmp_dir.iterdir():
-                zf.write(str(file_path), file_path.name)
-
-    return output_path
+    return _write_package(manifest, output_path)
 
 
 # ─── Import ───
@@ -286,9 +250,6 @@ def import_model(file_path: str) -> dict:
             "message": "",
         }
 
-        # Snapshot local state before import (used to decide whether to adopt identity)
-        pre_import_label_count = db.get_label_count()
-
         # Import labels
         labels_path = tmp_dir / "labels.json"
         if labels_path.exists():
@@ -328,7 +289,6 @@ def import_model(file_path: str) -> dict:
             # Get metrics from manifest
             metrics = manifest.get("metrics", {})
 
-            # Save model record in DB
             db.save_model_record(
                 version=imported_version,
                 accuracy=metrics.get("accuracy", 0.0),
@@ -336,20 +296,11 @@ def import_model(file_path: str) -> dict:
                 precision=metrics.get("precision", 0.0),
                 recall=metrics.get("recall", 0.0),
                 label_count=manifest.get("label_count", 0),
-                label_dist={},
                 feature_count=0,
                 model_path=str(dest),
                 recipe_path=recipe_dest,
+                architecture=imported_architecture,
             )
-
-            # Update architecture in the model record
-            conn = db.get_db()
-            conn.execute(
-                "UPDATE models SET architecture = ? WHERE version = ?",
-                (imported_architecture, imported_version)
-            )
-            conn.commit()
-            conn.close()
 
             result["model_loaded"] = True
 
