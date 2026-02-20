@@ -635,6 +635,13 @@ async def stats():
     """Get current system stats."""
     config = get_config()
     model = db.get_active_model()
+    gpu_available = False
+    try:
+        import torch
+        gpu_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+    except ImportError:
+        pass
+
     return {
         "magnitu_version": VERSION,
         "architecture": config.get("model_architecture", "transformer"),
@@ -644,6 +651,8 @@ async def stats():
         "label_distribution": db.get_label_distribution(),
         "active_model": model,
         "models_count": len(db.get_all_models()),
+        "gpu_available": gpu_available,
+        "gpu_enabled": config.get("use_gpu", True),
     }
 
 
@@ -655,10 +664,11 @@ async def update_settings(request: Request):
     data = await request.json()
     config = get_config()
     old_transformer_name = config.get("transformer_model_name", "")
+    old_use_gpu = config.get("use_gpu", True)
 
     for key in ["seismo_url", "api_key", "min_labels_to_train",
                 "recipe_top_keywords", "auto_train_after_n_labels", "alert_threshold",
-                "model_architecture", "transformer_model_name"]:
+                "model_architecture", "transformer_model_name", "use_gpu"]:
         if key in data:
             config[key] = data[key]
     save_config(config)
@@ -669,6 +679,10 @@ async def update_settings(request: Request):
     if new_transformer_name != old_transformer_name and old_transformer_name:
         db.invalidate_all_embeddings()
         pipeline.invalidate_embedder_cache()
+
+    # Reload embedder on the new device when GPU setting changes
+    if config.get("use_gpu", True) != old_use_gpu:
+        pipeline.release_embedder()
 
     return {"success": True, "config": config}
 

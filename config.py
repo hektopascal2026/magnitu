@@ -27,6 +27,7 @@ DEFAULTS = {
     "model_architecture": "transformer",     # "tfidf" or "transformer"
     "transformer_model_name": "xlm-roberta-base",
     "embedding_dim": 768,
+    "use_gpu": True,  # Use Apple Silicon GPU (MPS) for embeddings when available
 }
 
 

@@ -54,6 +54,18 @@ CLASS_WEIGHT_MAP = {
 _embedder = None   # lazy-loaded singleton
 
 
+def _select_device():
+    """Pick the best available torch device based on config."""
+    import torch
+
+    config = get_config()
+    use_gpu = config.get("use_gpu", True)
+
+    if use_gpu and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
 def _get_embedder():
     """Lazy-load the transformer model + tokenizer. Cached after first call."""
     global _embedder
@@ -69,18 +81,17 @@ def _get_embedder():
     logger.info("Loading transformer model: %s", model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name)
 
-    # Load in float16 to halve memory usage (~165MB instead of ~330MB)
+    device = _select_device()
+
     model = AutoModel.from_pretrained(
         model_name,
         torch_dtype=torch.float16,
         low_cpu_mem_usage=True,
     )
     model.eval()
+    model.to(device)
 
-    # Stay on CPU — MPS copies the model to GPU RAM *and* keeps it in
-    # system RAM, doubling the footprint on memory-constrained Macs.
-    device = torch.device("cpu")
-    logger.info("Transformer loaded on CPU (float16, ~165MB)")
+    logger.info("Transformer loaded on %s (float16)", device.type)
 
     _embedder = {"tokenizer": tokenizer, "model": model, "device": device}
     return _embedder
@@ -91,9 +102,13 @@ def release_embedder():
     global _embedder
     if _embedder is not None:
         import gc
+        was_mps = _embedder["device"].type == "mps"
         del _embedder
         _embedder = None
         gc.collect()
+        if was_mps:
+            import torch
+            torch.mps.empty_cache()
         logger.info("Transformer model released from memory.")
 
 
