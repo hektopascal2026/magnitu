@@ -17,20 +17,42 @@ echo "   Magnitu 2"
 echo "  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-# Check if already running
-if lsof -ti:$PORT > /dev/null 2>&1; then
-    echo "  Already running at $URL"
-    echo "  Opening browser..."
-    open "$URL" 2>/dev/null || echo "  Open $URL in your browser."
-    echo ""
-    echo "  To stop: close this window or press Ctrl+C"
-    read -r -p "  Press Enter to stop the server... "
-    lsof -ti:$PORT | xargs kill 2>/dev/null
-    exit 0
-fi
-
 # Check setup
 cd "$DIR" || exit 1
+
+# Check if already running — but still pull updates first
+if lsof -ti:$PORT > /dev/null 2>&1; then
+    NEED_RESTART=0
+
+    # Pull updates even when server is already running
+    if [ -d "$DIR/.git" ]; then
+        BEFORE=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+        git -C "$DIR" pull -q origin main 2>/dev/null || true
+        AFTER=$(git -C "$DIR" rev-parse HEAD 2>/dev/null)
+        if [ "$BEFORE" != "$AFTER" ]; then
+            echo "  Update available — restarting server..."
+            NEED_RESTART=1
+        fi
+    fi
+
+    if [ "$NEED_RESTART" = "1" ]; then
+        # Kill the old server and fall through to a fresh start
+        lsof -ti:$PORT | xargs kill 2>/dev/null
+        sleep 1
+        # Force kill if still alive
+        lsof -ti:$PORT | xargs kill -9 2>/dev/null 2>&1 || true
+        sleep 1
+    else
+        echo "  Already running at $URL (up to date)"
+        echo "  Opening browser..."
+        open "$URL" 2>/dev/null || echo "  Open $URL in your browser."
+        echo ""
+        echo "  To stop: close this window or press Ctrl+C"
+        read -r -p "  Press Enter to stop the server... "
+        lsof -ti:$PORT | xargs kill 2>/dev/null
+        exit 0
+    fi
+fi
 if [ ! -f "$PY" ]; then
     echo "  Not set up yet. Running installer..."
     echo ""
