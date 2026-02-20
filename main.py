@@ -2,6 +2,9 @@
 Magnitu 2 — ML-powered relevance scoring for Seismo.
 FastAPI application: serves the labeling UI, dashboard, and orchestrates ML pipeline.
 """
+import warnings
+warnings.filterwarnings("ignore", message="urllib3 v2 only supports OpenSSL")
+
 from fastapi import FastAPI, Request, Form, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
