@@ -214,7 +214,18 @@ def get_status() -> dict:
     return _request("GET", {"action": "magnitu_status"}).json()
 
 
-def test_connection() -> tuple[bool, str]:
+def verify_seismo_endpoints() -> tuple:
+    """Smoke-test that Seismo's label endpoint actually works.
+    POSTs an empty labels array — any non-200 means the endpoint is broken.
+    """
+    try:
+        resp = _request("POST", {"action": "magnitu_labels"}, json={"labels": []})
+        return True, "Label endpoint OK"
+    except Exception as e:
+        return False, "Label push endpoint broken: {}".format(e)
+
+
+def test_connection() -> tuple:
     """Test if we can connect to Seismo. Returns (success, message)."""
     try:
         status = get_status()

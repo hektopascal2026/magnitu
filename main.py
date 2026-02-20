@@ -18,6 +18,9 @@ import distiller
 import sampler
 import model_manager
 from config import get_config, save_config, BASE_DIR, VERSION
+import logging
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Magnitu", version=VERSION)
 
@@ -92,8 +95,8 @@ async def dashboard_page(request: Request):
         try:
             kw = explainer.global_keywords(limit=30)
             ctx["keywords"] = kw
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Failed to load dashboard keywords: %s", e)
 
     return templates.TemplateResponse("dashboard.html", ctx)
 
@@ -348,8 +351,9 @@ async def set_label(
     # Push label to Seismo in background (best-effort)
     try:
         sync.push_labels()
-    except Exception:
-        pass  # Don't fail the label action if push fails
+    except Exception as e:
+        logger.warning("Background label push failed: %s", e)
+        db.log_sync("push", 0, "FAILED: {}".format(e))
 
     return {"success": True, "entry_type": entry_type, "entry_id": entry_id, "label": label}
 
@@ -379,8 +383,9 @@ async def sync_pull():
         labels_synced = 0
         try:
             labels_synced = await loop.run_in_executor(None, sync.pull_labels)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Label pull failed during sync: %s", e)
+            db.log_sync("pull", 0, "FAILED label pull: {}".format(e))
 
         syncs = db.get_recent_syncs(1)
         sync_detail = syncs[0]["details"] if syncs else ""
@@ -429,8 +434,8 @@ async def sync_push():
             try:
                 loop = asyncio.get_event_loop()
                 await loop.run_in_executor(None, sync._compute_pending_embeddings)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("Embedding computation failed before push: %s", e)
 
     try:
         scores = pipeline.score_entries(all_entries)
@@ -483,12 +488,14 @@ async def sync_push():
 
     try:
         sync.push_labels()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning("Label push failed during score push: %s", e)
+        db.log_sync("push", 0, "FAILED label push: {}".format(e))
 
     try:
         recipe = distiller.distill_recipe()
-    except Exception:
+    except Exception as e:
+        logger.warning("Recipe distillation failed: %s", e)
         recipe = None
 
     recipe_result = {}
@@ -518,18 +525,43 @@ async def sync_labels():
         pushed = sync.push_labels()
     except Exception as e:
         raise HTTPException(500, f"Failed to push labels: {e}")
+    pull_error = None
     try:
         pulled = sync.pull_labels()
-    except Exception:
-        pass
-    return {"success": True, "pushed": pushed, "labels_imported": pulled}
+    except Exception as e:
+        logger.warning("Label pull failed: %s", e)
+        pull_error = str(e)
+    result = {"success": True, "pushed": pushed, "labels_imported": pulled}
+    if pull_error:
+        result["pull_error"] = pull_error
+    return result
 
 
 @app.get("/api/sync/test")
 async def sync_test():
-    """Test connection to Seismo."""
+    """Test connection to Seismo, including a label endpoint smoke test."""
     ok, msg = sync.test_connection()
-    return {"success": ok, "message": msg}
+    if not ok:
+        return {"success": False, "message": msg}
+    # Also verify the label push endpoint works
+    label_ok, label_msg = sync.verify_seismo_endpoints()
+    if not label_ok:
+        return {"success": True, "message": msg, "warning": label_msg}
+    return {"success": True, "message": msg}
+
+
+@app.get("/api/sync/health")
+async def sync_health():
+    """Return last sync status for each direction. Surfaces failures visibly."""
+    syncs = db.get_recent_syncs(20)
+    last_push = next((s for s in syncs if s["direction"] == "push"), None)
+    last_pull = next((s for s in syncs if s["direction"] == "pull"), None)
+    push_ok = last_push and not (last_push.get("details") or "").startswith("FAILED")
+    pull_ok = last_pull and not (last_pull.get("details") or "").startswith("FAILED")
+    return {
+        "push": {"ok": push_ok, "detail": dict(last_push) if last_push else None},
+        "pull": {"ok": pull_ok, "detail": dict(last_pull) if last_pull else None},
+    }
 
 
 # ─── API: Training ───

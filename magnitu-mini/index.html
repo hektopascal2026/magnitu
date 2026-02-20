@@ -266,12 +266,12 @@ body {
     border: 2px solid #000;
     background: #fff;
     font-size: 12px;
-    z-index: 100;
+    z-index: 9999;
     animation: flashIn 0.2s ease;
 }
 
 .flash-success { background: #f0fff0; }
-.flash-error { background: #fff0f0; border-color: #FF2C2C; }
+.flash-error { background: #fff0f0; border-color: #FF2C2C; max-height: 40vh; overflow-y: auto; word-break: break-word; }
 
 @keyframes flashIn {
     from { opacity: 0; transform: translateY(-8px); }
@@ -352,8 +352,14 @@ body {
         var div = document.createElement('div');
         div.className = 'flash flash-' + (type || 'success');
         div.textContent = msg;
+        if (type === 'error') {
+            console.error('[magnitu-mini]', msg);
+            div.style.cursor = 'pointer';
+            div.title = 'Tap to dismiss';
+            div.onclick = function() { div.remove(); };
+        }
         container.appendChild(div);
-        setTimeout(function() { div.remove(); }, 4000);
+        setTimeout(function() { div.remove(); }, type === 'error' ? 15000 : 4000);
     }
 
     // ── Seismo API ──
@@ -384,7 +390,10 @@ body {
                 if (!r.ok) {
                     if (r.status === 401) throw new Error('Bad API key (HTTP 401)');
                     if (r.status === 403) throw new Error('Access denied (HTTP 403)');
-                    throw new Error('HTTP ' + r.status);
+                    return r.text().then(function(body) {
+                        var detail = body.substring(0, 200);
+                        throw new Error('HTTP ' + r.status + ': ' + detail);
+                    });
                 }
                 return r.json();
             });
@@ -392,6 +401,10 @@ body {
 
     function fetchEntries() {
         return seismoRequest('GET', 'magnitu_entries&type=all&limit=500');
+    }
+
+    function verifyLabelEndpoint() {
+        return seismoRequest('POST', 'magnitu_labels', { labels: [] });
     }
 
     function pushLabel(entryType, entryId, label, reasoning) {
@@ -561,6 +574,12 @@ body {
                     app.innerHTML = '<div class="state-msg"><strong>No entries</strong><p>Seismo has no entries yet.</p></div>';
                     return;
                 }
+
+                // Smoke-test: verify label endpoint works before user starts labeling
+                verifyLabelEndpoint().catch(function(err) {
+                    flash('Warning: label push endpoint is broken (' + err.message + '). Labels will only save locally.', 'error');
+                });
+
                 // Shuffle so different users get different order
                 for (var i = entries.length - 1; i > 0; i--) {
                     var j = Math.floor(Math.random() * (i + 1));

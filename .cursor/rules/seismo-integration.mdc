@@ -9,11 +9,12 @@ Magnitu connects to **Seismo** (separate repo, PHP app hosted on netmind.ch). Se
 
 ## API Contract (seismo is the server)
 
-All requests go to seismo's `index.php` with `Authorization: Bearer <api_key>` header:
+All requests go to seismo's `index.php` with `api_key` as a query parameter (`?api_key=...`):
 
 - `GET ?action=magnitu_entries` — fetch entries (params: `since`, `type`, `limit`)
 - `POST ?action=magnitu_scores` — push batch scores (body: `{scores: [...], model_version}`)
 - `GET/POST ?action=magnitu_recipe` — GET returns recipe; POST uploads new recipe
+- `GET/POST ?action=magnitu_labels` — GET returns all labels; POST upserts labels (body: `{labels: [{entry_type, entry_id, label, reasoning, labeled_at}]}`)
 - `GET ?action=magnitu_status` — check connectivity + stats
 
 ## Entry format received from seismo
