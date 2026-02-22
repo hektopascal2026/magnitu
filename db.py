@@ -172,16 +172,23 @@ def upsert_entries(entries: List[dict]):
     conn.close()
 
 
-def get_unlabeled_entries(limit: int = 30) -> List[dict]:
-    """Get entries that haven't been labeled yet, newest first."""
+def get_unlabeled_entries(limit: int = 30, entry_type: Optional[str] = None) -> List[dict]:
+    """Get entries that haven't been labeled yet, newest first.
+    If entry_type is given (e.g. 'lex_item', 'feed_item'), only return that type.
+    """
     conn = get_db()
-    rows = conn.execute("""
+    sql = """
         SELECT e.* FROM entries e
         LEFT JOIN labels l ON e.entry_type = l.entry_type AND e.entry_id = l.entry_id
         WHERE l.id IS NULL
-        ORDER BY e.published_date DESC
-        LIMIT ?
-    """, (limit,)).fetchall()
+    """
+    params = []  # type: list
+    if entry_type:
+        sql += " AND e.entry_type = ?"
+        params.append(entry_type)
+    sql += " ORDER BY e.published_date DESC LIMIT ?"
+    params.append(limit)
+    rows = conn.execute(sql, params).fetchall()
     conn.close()
     return [dict(r) for r in rows]
 

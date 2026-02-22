@@ -195,7 +195,7 @@ def _get_chronological(unlabeled: List[dict], limit: int = 10) -> List[dict]:
 
 # ─── Main entry point ───
 
-def get_smart_entries(limit: int = 30) -> List[dict]:
+def get_smart_entries(limit: int = 30, entry_type: str = None) -> List[dict]:
     """
     Get a mixed set of entries optimised for active learning.
 
@@ -207,11 +207,12 @@ def get_smart_entries(limit: int = 30) -> List[dict]:
 
     If no model exists, falls back to newest unlabeled (current behaviour).
 
+    entry_type filters by entry_type (e.g. 'lex_item', 'feed_item').
+
     Each entry gets a `_sampling_reason` key: 'uncertain', 'conflict',
     'diverse', or 'new'.
     """
-    # Get all unlabeled entries (fetch more than we need for sampling headroom)
-    unlabeled = db.get_unlabeled_entries(limit=200)
+    unlabeled = db.get_unlabeled_entries(limit=200, entry_type=entry_type)
 
     if not unlabeled:
         return []

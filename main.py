@@ -56,13 +56,18 @@ def _base_context(request: Request) -> dict:
 # ─── Pages ───
 
 @app.get("/", response_class=HTMLResponse)
-async def labeling_page(request: Request):
+async def labeling_page(request: Request, source: str = "all"):
     """Main labeling page — smart-sampled for active learning."""
-    # First-run: redirect to setup if no model profile exists
     if not model_manager.has_profile():
         return RedirectResponse("/setup", status_code=302)
     ctx = _base_context(request)
-    entries = sampler.get_smart_entries(limit=30)
+    entry_type = None
+    if source == "lex":
+        entry_type = "lex_item"
+    elif source == "news":
+        entry_type = "feed_item"
+    entries = sampler.get_smart_entries(limit=30, entry_type=entry_type)
+    ctx["source_filter"] = source
 
     # Add existing labels and reasoning
     for entry in entries:
