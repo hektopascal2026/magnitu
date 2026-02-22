@@ -120,7 +120,11 @@ body {
 .source-rss { background: #add8e6; }
 .source-substack { background: #C5B4D1; }
 .source-email { background: #f5f5f5; }
-.source-lex_eu, .source-lex_ch { background: #f5f5f5; }
+.source-lex_eu { background: #FFF3BF; }
+.source-lex_ch { background: #FFD8D8; }
+.source-lex_de { background: #FFF3BF; }
+.source-lex_fr { background: #FFF3BF; }
+.source-lex_it { background: #FFF3BF; }
 
 .entry-date { font-style: italic; color: #555; }
 .entry-category { color: #555; }
@@ -278,6 +282,40 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Source filter bar ── */
+.filter-bar {
+    display: flex;
+    gap: 0;
+    padding: 8px 16px;
+    background: #fff;
+    border-bottom: 1px solid #eee;
+}
+
+.filter-btn {
+    flex: 1;
+    padding: 8px 6px;
+    border: 2px solid #000;
+    border-right-width: 0;
+    background: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: center;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.1s;
+}
+
+.filter-btn:last-child { border-right-width: 2px; }
+.filter-btn.active { background: #FF6B6B; color: #fff; }
+.filter-btn:not(.active):active { background: #f0f0f0; }
+
+.filter-btn .filter-count {
+    font-weight: 400;
+    font-size: 10px;
+    opacity: 0.7;
+}
+
 /* ── Settings gear ── */
 .settings-btn {
     background: none;
@@ -297,6 +335,11 @@ body {
     <button class="settings-btn" id="settingsBtn" title="Settings">&#9881;</button>
 </div>
 
+<div class="filter-bar" id="filterBar">
+    <button class="filter-btn active" data-type="all">All</button>
+    <button class="filter-btn" data-type="lex_item">Legislation</button>
+    <button class="filter-btn" data-type="feed_item">News</button>
+</div>
 <div id="flashContainer"></div>
 <div id="app"></div>
 
@@ -308,6 +351,9 @@ body {
     var STORAGE_KEY_LABELED = 'magnitu_label_done_ids';
     var STORAGE_KEY_COUNT = 'magnitu_label_session_count';
     var STORAGE_KEY_QUEUE = 'magnitu_label_retry_queue';
+    var STORAGE_KEY_FILTER = 'magnitu_label_filter';
+
+    var currentFilter = localStorage.getItem(STORAGE_KEY_FILTER) || 'all';
 
     function getConfig() {
         return {
@@ -446,7 +492,7 @@ body {
     }
 
     function fetchEntries() {
-        return seismoRequest('GET', 'magnitu_entries&type=all&limit=500');
+        return seismoRequest('GET', 'magnitu_entries&type=' + currentFilter + '&limit=500');
     }
 
     function verifyLabelEndpoint() {
@@ -669,6 +715,26 @@ body {
     document.getElementById('settingsBtn').addEventListener('click', function() {
         showSetup();
     });
+
+    // ── Source filter ──
+    var filterBar = document.getElementById('filterBar');
+    filterBar.addEventListener('click', function(e) {
+        var btn = e.target.closest('.filter-btn');
+        if (!btn || btn.classList.contains('active')) return;
+        filterBar.querySelectorAll('.filter-btn').forEach(function(b) { b.classList.remove('active'); });
+        btn.classList.add('active');
+        currentFilter = btn.dataset.type;
+        localStorage.setItem(STORAGE_KEY_FILTER, currentFilter);
+        loadEntries();
+    });
+
+    // Restore saved filter state
+    (function() {
+        var btns = filterBar.querySelectorAll('.filter-btn');
+        btns.forEach(function(b) {
+            b.classList.toggle('active', b.dataset.type === currentFilter);
+        });
+    })();
 
     // ── Init ──
     updateStats();

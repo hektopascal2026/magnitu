@@ -307,9 +307,85 @@
     <p>You don't need to think about which strategy is active — Magnitu mixes them automatically. Just label whatever appears and the model benefits.</p>
 </div>
 
-<!-- 10. Known Biases -->
+<!-- 10. Legislation Monitoring -->
 <div class="dashboard-section">
-    <h2>Known Biases</h2>
+    <h2>Legislation Monitoring: Finding Hidden Impact</h2>
+    <p class="section-desc">One of Seismo's key goals is to flag national legislation — from the EU, Germany, France, Italy, and eventually more — that would affect Switzerland or Swiss enterprises before other media or trade groups notice. This is where focused labeling becomes critical.</p>
+
+    <div class="about-section">
+        <h3>The Problem: Switzerland Is Never Mentioned</h3>
+        <p>Foreign legislation that impacts Switzerland rarely says so. A new Italian finance law might offer 280% depreciation for industrial equipment — but only for goods manufactured in the EU or EEA. Switzerland is neither. The law never mentions Switzerland, yet it threatens 900 million CHF in Swiss machinery exports overnight.</p>
+        <p>This is exactly what happened in January 2026, when Italy's new Finanzgesetz created massive tax incentives limited to EU/EEA-manufactured goods. Swissmem flagged it, the federal government intervened in Brussels and Rome, and the rule was eventually corrected — but only because someone caught it early.</p>
+        <p>A keyword search for "Schweiz" or "Switzerland" in the law text would have found nothing. The signal wasn't in what the law said, but in what it implied.</p>
+    </div>
+
+    <div class="about-section">
+        <h3>How Magnitu Learns to Spot These</h3>
+        <p>The model cannot learn "this affects Switzerland" from a few keyword matches. It needs to see enough labeled examples of legislation that impacts Switzerland to learn the <em>patterns</em> that signal hidden relevance:</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">Exclusion language</span>
+                <span class="about-detail-value">Phrases like "EU or EEA", "Binnenmarkt", "member states" that define a scope Switzerland falls outside of.</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Sector overlap</span>
+                <span class="about-detail-value">Regulations affecting machinery, pharma, financial services, agriculture, energy, or transport — sectors where Switzerland has bilateral agreements or major exporters.</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Third-country provisions</span>
+                <span class="about-detail-value">"Drittstaaten", "third country", "equivalence", "recognition" — the legal vocabulary of being outside the club.</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Compliance triggers</span>
+                <span class="about-detail-value">New standards, conformity assessments ("CE-Kennzeichnung", "Konformitätsbewertung"), or market access rules that Swiss companies must follow to sell into the EU.</span>
+            </div>
+        </div>
+        <p>The transformer model understands these patterns across languages — a German "Verordnung" about "Drittstaaten" and a French "règlement" about "pays tiers" produce similar meaning vectors. Your labels in one language help the model recognise the same patterns in others.</p>
+    </div>
+
+    <div class="about-section">
+        <h3>The Reasoning Field Is Especially Valuable Here</h3>
+        <p>When you label a piece of legislation, the <em>why</em> matters more than usual. The article text might be dry legal language, but your reasoning captures the Swiss angle:</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">Example reasoning</span>
+                <span class="about-detail-value">"EU/EEA-only depreciation excludes CH — threatens machinery exports" or "new conformity rules would require CH pharma companies to re-certify"</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">What this does</span>
+                <span class="about-detail-value">The recipe distiller extracts keywords from your reasoning and boosts them. Terms like "Maschinenexporte", "Gleichwertigkeit", "bilateral" get higher weights for investigation_lead, making Seismo's live scoring more sensitive to exactly these patterns.</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="about-section">
+        <h3>Focused Labeling in Magnitu Mini</h3>
+        <p>Magnitu Mini has a <strong>source filter</strong> (All / Legislation / News) in the top bar. Switch to "Legislation" to label only Lex items. This lets you efficiently build up the training data the model needs — without wading through RSS articles in between.</p>
+        <p>A target of 50–100 labeled legislation items (with reasoning notes on the important ones) is enough for the model to start distinguishing Swiss-relevant legislation from EU-internal housekeeping. The existing four labels map directly:</p>
+        <div class="about-detail-grid">
+            <div class="about-detail">
+                <span class="about-detail-label">Investigation Lead</span>
+                <span class="about-detail-value">Could be a story: legislation that directly threatens Swiss market access, creates competitive disadvantage, or reveals policy shifts affecting Swiss interests.</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Important</span>
+                <span class="about-detail-value">Worth monitoring: affects a Swiss-relevant sector but isn't immediately actionable.</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Background</span>
+                <span class="about-detail-value">Tangentially related to Swiss interests, or too early-stage to assess impact.</span>
+            </div>
+            <div class="about-detail">
+                <span class="about-detail-label">Noise</span>
+                <span class="about-detail-value">EU-internal procedure, unrelated sector, or administrative routine with no Swiss angle.</span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 11. Known Biases -->
+<div class="dashboard-section">
+    <h2>Known Biases &amp; Limitations</h2>
     <p class="section-desc">Every scoring system has blind spots. Knowing about them helps you label more effectively and interpret scores more critically.</p>
 
     <div class="about-section">
@@ -394,7 +470,7 @@
     </div>
 </div>
 
-<!-- 11. Sharing Models -->
+<!-- 12. Sharing Models -->
 <div class="dashboard-section">
     <h2>Sharing Models</h2>
     <p class="section-desc">Every Magnitu instance runs a named model profile. Models are portable — you can export them, send them to a colleague, and import them on another machine.</p>
@@ -447,7 +523,7 @@
     </div>
 </div>
 
-<!-- 12. Forking & Personalisation -->
+<!-- 13. Forking & Personalisation -->
 <div class="dashboard-section">
     <h2>Forking &amp; Personalisation</h2>
     <p class="section-desc">Magnitu supports a base-model-plus-fork workflow, designed for newsrooms where journalists share common ground but have different beats.</p>
@@ -501,7 +577,7 @@
     </div>
 </div>
 
-<!-- 13. History: Magnitu 1 vs 2 -->
+<!-- 14. History: Magnitu 1 vs 2 -->
 <div class="dashboard-section">
     <h2>History: Magnitu 1 vs 2</h2>
     <p class="section-desc">Magnitu 2 replaced the text-matching engine with a language model. Here's a comparison for reference.</p>
@@ -551,7 +627,7 @@
     </div>
 </div>
 
-<!-- 14. Tips -->
+<!-- 15. Tips -->
 <div class="dashboard-section">
     <h2>Tips for Faster Learning</h2>
     <div class="about-tips">
@@ -573,10 +649,13 @@
         <div class="about-tip">
             <strong>Check the Dashboard.</strong> Watch accuracy and F1 score climb across model versions. If a class has very few labels, focus your next session on it.
         </div>
+        <div class="about-tip">
+            <strong>Use the Legislation filter.</strong> In Magnitu Mini, switch to "Legislation" to label only Lex items. Write reasoning notes explaining the Swiss angle — the model can't see it in the legal text alone.
+        </div>
     </div>
 </div>
 
-<!-- 15. Keyboard Shortcuts -->
+<!-- 16. Keyboard Shortcuts -->
 <div class="dashboard-section">
     <h2>Keyboard Shortcuts (Label Page)</h2>
     <div class="shortcuts-grid">
