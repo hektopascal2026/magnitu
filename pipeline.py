@@ -226,7 +226,7 @@ def build_tfidf_pipeline() -> Pipeline:
     """Build the scikit-learn pipeline: TF-IDF + structured features -> LogReg."""
     text_transformer = TfidfVectorizer(
         max_features=10000,
-        ngram_range=(1, 2),
+        ngram_range=(1, 3),
         sublinear_tf=True,
         strip_accents="unicode",
         min_df=2,
@@ -648,7 +648,7 @@ def _train_tfidf() -> dict:
             "text",
             TfidfVectorizer(
                 max_features=5000,
-                ngram_range=(1, 2),
+                ngram_range=(1, 3),
                 sublinear_tf=True,
                 strip_accents="unicode",
                 min_df=1,
@@ -837,7 +837,7 @@ def train_tfidf_student() -> Optional[Pipeline]:
             "text",
             TfidfVectorizer(
                 max_features=5000,
-                ngram_range=(1, 2),
+                ngram_range=(1, 3),
                 sublinear_tf=True,
                 strip_accents="unicode",
                 min_df=1,

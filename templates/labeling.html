@@ -15,6 +15,7 @@
     </div>
     <div class="progress-actions">
         <button class="btn btn-primary" id="syncPullBtn" title="Fetch new entries from Seismo">Sync</button>
+        <button class="btn" id="syncFullBtn" title="Backfill all Seismo entries and embeddings">Full Sync</button>
         {% if label_count >= (config.min_labels_to_train or 20) %}
             <button class="btn" id="trainBtn" title="Train model on labeled entries">Train</button>
             {% if active_model %}
@@ -23,6 +24,13 @@
         {% else %}
             <button class="btn" disabled title="Need {{ config.min_labels_to_train or 20 }} labels to train (have {{ label_count }})">Train ({{ label_count }}/{{ config.min_labels_to_train or 20 }})</button>
         {% endif %}
+    </div>
+    <div class="task-progress" id="taskProgress" style="display:none;">
+        <div class="task-progress-label" id="taskProgressLabel">Working...</div>
+        <div class="task-progress-track">
+            <div class="task-progress-fill" id="taskProgressFill" style="width:0%;"></div>
+        </div>
+        <div class="task-progress-meta" id="taskProgressMeta">0%</div>
     </div>
 </div>
 
@@ -170,6 +178,10 @@
     var queueEl = document.getElementById('queueCount');
     var todayCount = {{ today_labels }};
     var queueCount = {{ unlabeled_count }};
+    var taskProgress = document.getElementById('taskProgress');
+    var taskProgressLabel = document.getElementById('taskProgressLabel');
+    var taskProgressFill = document.getElementById('taskProgressFill');
+    var taskProgressMeta = document.getElementById('taskProgressMeta');
 
     // Focus first unlabeled card
     function focusFirstUnlabeled() {
@@ -336,39 +348,111 @@
         }
     });
 
-    // Sync button
-    document.getElementById('syncPullBtn').addEventListener('click', function() {
-        this.disabled = true;
-        this.textContent = 'Syncing...';
-        fetch('/api/sync/pull', { method: 'POST' })
+    function setProgress(visible, label, pct, meta) {
+        taskProgress.style.display = visible ? 'block' : 'none';
+        if (!visible) return;
+        taskProgressLabel.textContent = label || 'Working...';
+        taskProgressFill.style.width = (pct || 0) + '%';
+        taskProgressMeta.textContent = (meta || (pct || 0) + '%');
+    }
+
+    function pollJob(jobId, onDone, onFail) {
+        var timer = setInterval(function() {
+            fetch('/api/jobs/' + jobId)
+                .then(function(r) { return r.json(); })
+                .then(function(job) {
+                    setProgress(true, job.message || 'Working...', job.progress || 0, (job.progress || 0) + '%');
+                    if (job.status === 'success') {
+                        clearInterval(timer);
+                        onDone(job.result || {});
+                    } else if (job.status === 'error') {
+                        clearInterval(timer);
+                        onFail(job.error || 'Unknown error');
+                    }
+                })
+                .catch(function(err) {
+                    clearInterval(timer);
+                    onFail(err.message);
+                });
+        }, 1000);
+    }
+
+    function runSync(fullMode) {
+        var syncBtn = document.getElementById('syncPullBtn');
+        var fullBtn = document.getElementById('syncFullBtn');
+        syncBtn.disabled = true;
+        fullBtn.disabled = true;
+        syncBtn.textContent = fullMode ? 'Sync' : 'Syncing...';
+        fullBtn.textContent = fullMode ? 'Full Syncing...' : 'Full Sync';
+        setProgress(true, fullMode ? 'Starting full sync...' : 'Starting sync...', 1, '1%');
+
+        var url = fullMode ? '/api/sync/pull?full=true&background=true' : '/api/sync/pull?background=true';
+        fetch(url, { method: 'POST' })
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                if (data.success) {
-                    var msg = 'Fetched ' + data.entries_fetched + ' entries';
-                    if (data.embeddings_computed > 0) {
-                        msg += ', ' + data.embeddings_computed + ' embeddings computed';
+                if (!data.success || !data.job_id) throw new Error(data.detail || 'Failed to start sync');
+                pollJob(
+                    data.job_id,
+                    function(result) {
+                        setProgress(true, 'Sync complete', 100, '100%');
+                        var msg = 'Fetched ' + result.entries_fetched + ' entries';
+                        if (result.full_mode && result.entries_by_type) {
+                            msg += ' (news ' + (result.entries_by_type.feed_item || 0) +
+                                   ', email ' + (result.entries_by_type.email || 0) +
+                                   ', lex ' + (result.entries_by_type.lex_item || 0) + ')';
+                        }
+                        if (result.embeddings_computed > 0) {
+                            msg += ', ' + result.embeddings_computed + ' embeddings computed';
+                        }
+                        if (result.full_mode) {
+                            msg += ' in ' + (result.embedding_rounds || 0) + ' embedding pass(es)';
+                        }
+                        if (result.labels_synced > 0) {
+                            msg += ', ' + result.labels_synced + ' labels synced';
+                        }
+                        if (result.sync_detail && result.sync_detail.indexOf('conflict') > -1) {
+                            msg += ' (some label conflicts resolved by timestamp)';
+                        }
+                        flash(msg + '.', 'success');
+                        if (result.embedding_warning) {
+                            flash(result.embedding_warning + ' Try syncing again.', 'error');
+                        }
+                        if (result.full_mode && result.remote_total && result.entry_count < result.remote_total) {
+                            flash(
+                                'Full sync coverage: local ' + result.entry_count + ' / remote ' + result.remote_total +
+                                ' entries. Run Full Sync again if needed.',
+                                'error'
+                            );
+                        }
+                        syncBtn.disabled = false;
+                        fullBtn.disabled = false;
+                        syncBtn.textContent = 'Sync';
+                        fullBtn.textContent = 'Full Sync';
+                        setTimeout(function() { location.reload(); }, 1500);
+                    },
+                    function(errMsg) {
+                        flash('Sync failed: ' + errMsg, 'error');
+                        syncBtn.disabled = false;
+                        fullBtn.disabled = false;
+                        syncBtn.textContent = 'Sync';
+                        fullBtn.textContent = 'Full Sync';
+                        setProgress(false);
                     }
-                    if (data.labels_synced > 0) {
-                        msg += ', ' + data.labels_synced + ' labels synced';
-                    }
-                    if (data.sync_detail && data.sync_detail.indexOf('conflict') > -1) {
-                        msg += ' (some label conflicts resolved by timestamp)';
-                    }
-                    flash(msg + '.', 'success');
-                    if (data.embedding_warning) {
-                        flash(data.embedding_warning + ' Try syncing again.', 'error');
-                    }
-                    setTimeout(function() { location.reload(); }, 1500);
-                } else {
-                    flash('Sync failed: ' + (data.detail || 'Unknown error'), 'error');
-                }
+                );
             })
-            .catch(function(err) { flash('Sync error: ' + err.message, 'error'); })
-            .finally(function() {
-                document.getElementById('syncPullBtn').disabled = false;
-                document.getElementById('syncPullBtn').textContent = 'Sync';
+            .catch(function(err) {
+                flash('Sync error: ' + err.message, 'error');
+                syncBtn.disabled = false;
+                fullBtn.disabled = false;
+                syncBtn.textContent = 'Sync';
+                fullBtn.textContent = 'Full Sync';
+                setProgress(false);
             });
-    });
+    }
+
+    // Sync buttons
+    document.getElementById('syncPullBtn').addEventListener('click', function() { runSync(false); });
+    document.getElementById('syncFullBtn').addEventListener('click', function() { runSync(true); });
 
     // Train button
     var trainBtn = document.getElementById('trainBtn');
@@ -405,9 +489,10 @@
     var pushBtn = document.getElementById('pushBtn');
     if (pushBtn) {
         pushBtn.addEventListener('click', function() {
-            this.disabled = true;
-            this.textContent = 'Pushing...';
-            fetch('/api/sync/push', { method: 'POST' })
+            pushBtn.disabled = true;
+            pushBtn.textContent = 'Pushing...';
+            setProgress(true, 'Starting push...', 1, '1%');
+            fetch('/api/sync/push?background=true', { method: 'POST' })
                 .then(function(r) {
                     if (!r.ok) {
                         return r.text().then(function(body) {
@@ -418,16 +503,33 @@
                     return r.json();
                 })
                 .then(function(data) {
-                    if (data.success) {
-                        flash('Pushed ' + data.scores_pushed + ' scores to Seismo.', 'success');
-                    } else {
-                        flash('Push failed: ' + (data.detail || 'Unknown error'), 'error');
-                    }
+                    if (!data.success || !data.job_id) throw new Error(data.detail || 'Failed to start push');
+                    pollJob(
+                        data.job_id,
+                        function(result) {
+                            setProgress(true, 'Push complete', 100, '100%');
+                            if (result.success) {
+                                flash('Pushed ' + result.scores_pushed + ' scores to Seismo.', 'success');
+                            } else {
+                                flash('Push failed: ' + (result.detail || 'Unknown error'), 'error');
+                            }
+                            pushBtn.disabled = false;
+                            pushBtn.textContent = 'Push to Seismo';
+                            setTimeout(function() { setProgress(false); }, 1200);
+                        },
+                        function(errMsg) {
+                            flash('Push failed: ' + errMsg, 'error');
+                            pushBtn.disabled = false;
+                            pushBtn.textContent = 'Push to Seismo';
+                            setProgress(false);
+                        }
+                    );
                 })
-                .catch(function(err) { flash('Push failed: ' + err.message, 'error'); })
-                .finally(function() {
+                .catch(function(err) {
+                    flash('Push failed: ' + err.message, 'error');
                     pushBtn.disabled = false;
                     pushBtn.textContent = 'Push to Seismo';
+                    setProgress(false);
                 });
         });
     }

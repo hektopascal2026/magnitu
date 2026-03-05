@@ -6,6 +6,8 @@ For TF-IDF models, provides keyword-level feature attribution.
 """
 import numpy as np
 import joblib
+import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +21,61 @@ from pipeline import (
     embed_entries,
     CLASS_WEIGHT_MAP,
 )
+
+
+def _extract_recipe_tokens(text: str) -> list:
+    """Extract unigram, bigram, and trigram candidates for recipe matching."""
+    tokens = re.findall(r"\b[a-zA-Z0-9\u00C0-\u024F]{2,}\b", (text or "").lower())
+    grams = []
+    for n in (2, 3):
+        if len(tokens) < n:
+            break
+        for i in range(len(tokens) - n + 1):
+            grams.append(" ".join(tokens[i:i + n]))
+    return tokens + grams
+
+
+def _recipe_phrase_contributions(entry: dict, model_info: dict, probs: dict, limit: int = 8) -> list:
+    """Collect matched recipe phrase contributions weighted by class probabilities."""
+    recipe_path = model_info.get("recipe_path", "")
+    if not recipe_path or not Path(recipe_path).exists():
+        return []
+    try:
+        with open(recipe_path) as f:
+            recipe = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return []
+
+    keywords = recipe.get("keywords", {})
+    text = "{} {} {}".format(
+        entry.get("title", ""),
+        entry.get("description", ""),
+        entry.get("content", ""),
+    )
+    all_tokens = _extract_recipe_tokens(text)
+
+    phrase_scores = {}
+    for tok in all_tokens:
+        if " " not in tok:
+            continue
+        cls_wts = keywords.get(tok)
+        if not cls_wts:
+            continue
+        weighted = 0.0
+        for cls, p in probs.items():
+            weighted += float(cls_wts.get(cls, 0.0)) * float(p)
+        if abs(weighted) > 1e-6:
+            phrase_scores[tok] = phrase_scores.get(tok, 0.0) + weighted
+
+    items = sorted(phrase_scores.items(), key=lambda kv: abs(kv[1]), reverse=True)[:limit]
+    return [
+        {
+            "feature": phrase,
+            "weight": round(float(weight), 4),
+            "direction": "positive" if weight > 0 else "negative",
+        }
+        for phrase, weight in items
+    ]
 
 
 def explain_entry(entry: dict) -> Optional[dict]:
@@ -136,15 +193,16 @@ def _explain_transformer(entry: dict, model_info: dict) -> Optional[dict]:
     probs = dict(zip(class_names, [round(float(p), 4) for p in probabilities]))
     relevance = sum(probs.get(c, 0) * CLASS_WEIGHT_MAP.get(c, 0) for c in class_names)
 
-    # For transformer mode, top_features reports the class probability breakdown
-    # rather than keyword-level attribution
-    top_features = []
-    for cls in class_names:
-        top_features.append({
-            "feature": cls.replace("_", " "),
-            "weight": round(float(probs.get(cls, 0)), 4),
-            "direction": "positive" if probs.get(cls, 0) > 0.25 else "neutral",
-        })
+    # Phrase-aware explanation: first show matched recipe phrases for the
+    # predicted class (especially useful for legal text), then class probs.
+    top_features = _recipe_phrase_contributions(entry, model_info, probs, limit=8)
+    if len(top_features) < 4:
+        for cls in class_names:
+            top_features.append({
+                "feature": cls.replace("_", " "),
+                "weight": round(float(probs.get(cls, 0)), 4),
+                "direction": "positive" if probs.get(cls, 0) > 0.25 else "neutral",
+            })
 
     return {
         "prediction": prediction,

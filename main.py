@@ -12,6 +12,9 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 import json
 from typing import Optional
+import threading
+import uuid
+from datetime import datetime
 
 import db
 import sync
@@ -30,6 +33,275 @@ app = FastAPI(title="Magnitu", version=VERSION)
 # Static files and templates
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Background job registry for long-running UI actions (sync/push)
+_JOB_LOCK = threading.Lock()
+_JOBS = {}
+
+
+def _create_job(job_type: str) -> str:
+    job_id = uuid.uuid4().hex
+    with _JOB_LOCK:
+        _JOBS[job_id] = {
+            "job_id": job_id,
+            "job_type": job_type,
+            "status": "queued",
+            "progress": 0,
+            "message": "Queued",
+            "created_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.utcnow().isoformat(),
+            "result": None,
+            "error": None,
+        }
+    return job_id
+
+
+def _update_job(job_id: str, **kwargs):
+    with _JOB_LOCK:
+        job = _JOBS.get(job_id)
+        if not job:
+            return
+        job.update(kwargs)
+        job["updated_at"] = datetime.utcnow().isoformat()
+
+
+def _get_job(job_id: str) -> Optional[dict]:
+    with _JOB_LOCK:
+        job = _JOBS.get(job_id)
+        return dict(job) if job else None
+
+
+def _run_job(job_id: str, target):
+    _update_job(job_id, status="running", progress=1, message="Starting...")
+    try:
+        def progress_cb(pct: int, msg: str):
+            _update_job(job_id, progress=max(0, min(100, int(pct))), message=msg)
+
+        result = target(progress_cb)
+        _update_job(
+            job_id,
+            status="success",
+            progress=100,
+            message="Done",
+            result=result,
+            error=None,
+        )
+    except Exception as e:
+        _update_job(
+            job_id,
+            status="error",
+            message=str(e),
+            error=str(e),
+        )
+
+
+def _sync_pull_impl(full: bool, progress_cb=None) -> dict:
+    emb_before = db.get_embedding_count()
+    count = 0
+    entries_by_type = {}
+    remote_total = 0
+    embedding_rounds = 0
+
+    if progress_cb:
+        progress_cb(5, "Starting sync...")
+
+    if full:
+        # Full backfill mode: pull each source family with high limits, then
+        # iterate embedding computation until no missing embeddings remain.
+        try:
+            status = sync.get_status()
+            remote_entries = status.get("entries", {})
+            remote_total = int(remote_entries.get("total", 0) or 0)
+        except Exception:
+            remote_entries = {}
+            remote_total = 0
+
+        type_specs = [
+            ("feed_item", "feed_items"),
+            ("email", "emails"),
+            ("lex_item", "lex_items"),
+        ]
+        for idx, (entry_type, status_key) in enumerate(type_specs):
+            expected = int(remote_entries.get(status_key, 0) or 0)
+            limit = max(1000, expected + 250)
+            if progress_cb:
+                progress_cb(10 + idx * 20, "Pulling {} entries...".format(entry_type))
+            fetched = sync.pull_entries(entry_type=entry_type, limit=limit)
+            entries_by_type[entry_type] = fetched
+            count += fetched
+
+        if get_config().get("model_architecture") == "transformer":
+            # Keep running embedding pass until no missing entries remain.
+            while db.get_entries_without_embeddings(limit=1):
+                if progress_cb:
+                    missing_now = len(db.get_entries_without_embeddings(limit=5000))
+                    progress_cb(
+                        min(90, 70 + embedding_rounds * 4),
+                        "Computing embeddings ({} missing)...".format(missing_now)
+                    )
+                sync._compute_pending_embeddings()
+                embedding_rounds += 1
+                if embedding_rounds >= 25:
+                    break
+    else:
+        if progress_cb:
+            progress_cb(25, "Pulling latest entries...")
+        count = sync.pull_entries()
+        embedding_rounds = 1
+
+    if progress_cb:
+        progress_cb(92, "Pulling labels...")
+    labels_synced = 0
+    try:
+        labels_synced = sync.pull_labels()
+    except Exception as e:
+        logger.warning("Label pull failed during sync: %s", e)
+        db.log_sync("pull", 0, "FAILED label pull: {}".format(e))
+
+    syncs = db.get_recent_syncs(1)
+    sync_detail = syncs[0]["details"] if syncs else ""
+
+    emb_after = db.get_embedding_count()
+    entry_count = db.get_entry_count()
+    emb_computed = emb_after - emb_before
+    emb_warning = ""
+    if entry_count > 0 and emb_after < entry_count * 0.5:
+        emb_warning = "Only {}/{} entries have embeddings. Model scoring will be limited.".format(
+            emb_after, entry_count
+        )
+
+    result = {
+        "success": True,
+        "full_mode": full,
+        "entries_fetched": count,
+        "labels_synced": labels_synced,
+        "sync_detail": sync_detail,
+        "embeddings": emb_after,
+        "embeddings_computed": emb_computed,
+        "entry_count": entry_count,
+        "embedding_warning": emb_warning,
+        "embedding_rounds": embedding_rounds,
+    }
+    if full:
+        result["entries_by_type"] = entries_by_type
+        result["remote_total"] = remote_total
+    return result
+
+
+def _sync_push_impl(progress_cb=None) -> dict:
+    import httpx as _httpx
+
+    if progress_cb:
+        progress_cb(5, "Preparing push...")
+
+    model_info = db.get_active_model()
+    if not model_info:
+        raise ValueError("No trained model. Train first.")
+
+    all_entries = db.get_all_entries()
+    if not all_entries:
+        raise ValueError("No entries to score.")
+
+    cfg = get_config()
+    if cfg.get("model_architecture") == "transformer":
+        missing = db.get_entries_without_embeddings(limit=5000)
+        if missing:
+            if progress_cb:
+                progress_cb(20, "Computing missing embeddings...")
+            sync._compute_pending_embeddings()
+
+    if progress_cb:
+        progress_cb(45, "Scoring entries...")
+    try:
+        scores = pipeline.score_entries(all_entries)
+    except Exception as e:
+        raise ValueError("Scoring failed: {}".format(e))
+
+    if not scores:
+        emb_count = db.get_embedding_count()
+        entry_count = db.get_entry_count()
+        raise ValueError(
+            "No scores produced. Embeddings: {}/{} entries. Try syncing again.".format(emb_count, entry_count)
+        )
+
+    if progress_cb:
+        progress_cb(62, "Building explanations...")
+    score_by_key = {(s["entry_type"], s["entry_id"]): s for s in scores}
+    for entry in all_entries:
+        key = (entry["entry_type"], entry["entry_id"])
+        score = score_by_key.get(key)
+        if not score:
+            continue
+        try:
+            exp = explainer.explain_entry(entry)
+            if exp:
+                score["explanation"] = {
+                    "top_features": exp["top_features"],
+                    "confidence": exp["confidence"],
+                    "prediction": exp["prediction"],
+                }
+        except Exception:
+            pass
+
+    profile = model_manager.get_profile()
+    model_meta = None
+    if profile:
+        model_meta = {
+            "model_name": profile.get("model_name", ""),
+            "model_uuid": profile.get("model_uuid", ""),
+            "model_description": profile.get("description", ""),
+            "model_version": model_info["version"],
+            "model_trained_at": model_info.get("trained_at", ""),
+            "accuracy": model_info.get("accuracy", 0.0),
+            "f1_score": model_info.get("f1_score", 0.0),
+            "label_count": model_info.get("label_count", 0),
+            "architecture": model_info.get("architecture", "tfidf"),
+        }
+
+    if progress_cb:
+        progress_cb(78, "Pushing scores to Seismo...")
+    try:
+        score_result = sync.push_scores(scores, model_info["version"], model_meta=model_meta)
+    except Exception as e:
+        detail = str(e)
+        if isinstance(e, _httpx.HTTPStatusError):
+            detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
+        raise ValueError("Failed to push scores: {}".format(detail))
+
+    if progress_cb:
+        progress_cb(88, "Pushing labels...")
+    try:
+        sync.push_labels()
+    except Exception as e:
+        logger.warning("Label push failed during score push: %s", e)
+        db.log_sync("push", 0, "FAILED label push: {}".format(e))
+
+    if progress_cb:
+        progress_cb(93, "Building recipe...")
+    try:
+        recipe = distiller.distill_recipe()
+    except Exception as e:
+        logger.warning("Recipe distillation failed: %s", e)
+        recipe = None
+
+    recipe_result = {}
+    if recipe:
+        if progress_cb:
+            progress_cb(97, "Pushing recipe...")
+        try:
+            recipe_result = sync.push_recipe(recipe)
+        except Exception as e:
+            detail = str(e)
+            if isinstance(e, _httpx.HTTPStatusError):
+                detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
+            recipe_result = {"error": detail}
+
+    return {
+        "success": True,
+        "scores_pushed": len(scores),
+        "score_result": score_result,
+        "recipe_result": recipe_result,
+    }
 
 
 # ─── Template helpers ───
@@ -50,6 +322,58 @@ def _base_context(request: Request) -> dict:
         "profile": profile,
         "architecture": config.get("model_architecture", "transformer"),
         "embedding_count": db.get_embedding_count(),
+    }
+
+
+def _extract_legal_patterns(limit: int = 12) -> dict:
+    """Read active recipe and expose top legal phrase patterns for dashboard UI."""
+    model = db.get_active_model()
+    if not model or not model.get("recipe_path"):
+        return {"positive": [], "negative": []}
+    recipe_path = Path(model["recipe_path"])
+    if not recipe_path.exists():
+        return {"positive": [], "negative": []}
+    try:
+        with open(recipe_path) as f:
+            recipe = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {"positive": [], "negative": []}
+
+    keywords = recipe.get("keywords", {})
+    if not keywords:
+        return {"positive": [], "negative": []}
+
+    # Focus on phrase-like features and legal-domain hints.
+    legal_markers = (
+        "eu", "eea", "ewr", "third", "country", "member state",
+        "dritt", "tiers", "conformity", "assessment", "market access",
+        "equivalence", "delegated", "implementing", "corrigendum",
+        "annex", "regulation", "directive", "ce marking", "single market",
+    )
+
+    positives = []
+    negatives = []
+    for phrase, cls_wts in keywords.items():
+        if " " not in phrase:
+            continue
+        p = phrase.lower()
+        if not any(m in p for m in legal_markers):
+            continue
+        inv = float(cls_wts.get("investigation_lead", 0.0))
+        imp = float(cls_wts.get("important", 0.0))
+        noise = float(cls_wts.get("noise", 0.0))
+        pos_score = inv + imp * 0.7
+        neg_score = noise
+        if pos_score > 0:
+            positives.append((phrase, round(pos_score, 4)))
+        if neg_score > 0:
+            negatives.append((phrase, round(neg_score, 4)))
+
+    positives.sort(key=lambda x: x[1], reverse=True)
+    negatives.sort(key=lambda x: x[1], reverse=True)
+    return {
+        "positive": positives[:limit],
+        "negative": negatives[:limit],
     }
 
 
@@ -96,6 +420,7 @@ async def dashboard_page(request: Request):
     ctx = _base_context(request)
     ctx["models"] = db.get_all_models()
     ctx["syncs"] = db.get_recent_syncs(20)
+    ctx["legal_patterns"] = _extract_legal_patterns()
 
     # Get keyword data if model exists
     ctx["keywords"] = {}
@@ -379,156 +704,57 @@ async def remove_label(
 # ─── API: Sync ───
 
 @app.post("/api/sync/pull")
-async def sync_pull():
-    """Pull entries and labels from Seismo. In transformer mode, also computes embeddings."""
+async def sync_pull(full: bool = False, background: bool = False):
+    """Pull entries and labels from Seismo.
+
+    full=False (default): quick sync (single pull + one embedding pass)
+    full=True: full backfill by source type + embedding exhaustion pass
+    """
     import asyncio
+    if background:
+        job_type = "sync_pull_full" if full else "sync_pull"
+        job_id = _create_job(job_type)
+        t = threading.Thread(
+            target=lambda: _run_job(job_id, lambda cb: _sync_pull_impl(full=full, progress_cb=cb)),
+            daemon=True,
+        )
+        t.start()
+        return {"success": True, "job_id": job_id}
+
     try:
         loop = asyncio.get_event_loop()
-        emb_before = db.get_embedding_count()
-        count = await loop.run_in_executor(None, sync.pull_entries)
-        emb_after = db.get_embedding_count()
-
-        labels_synced = 0
-        try:
-            labels_synced = await loop.run_in_executor(None, sync.pull_labels)
-        except Exception as e:
-            logger.warning("Label pull failed during sync: %s", e)
-            db.log_sync("pull", 0, "FAILED label pull: {}".format(e))
-
-        syncs = db.get_recent_syncs(1)
-        sync_detail = syncs[0]["details"] if syncs else ""
-
-        entry_count = db.get_entry_count()
-        emb_computed = emb_after - emb_before
-        emb_warning = ""
-        if entry_count > 0 and emb_after < entry_count * 0.5:
-            emb_warning = "Only {}/{} entries have embeddings. Model scoring will be limited.".format(
-                emb_after, entry_count
-            )
-
-        return {
-            "success": True,
-            "entries_fetched": count,
-            "labels_synced": labels_synced,
-            "sync_detail": sync_detail,
-            "embeddings": emb_after,
-            "embeddings_computed": emb_computed,
-            "entry_count": entry_count,
-            "embedding_warning": emb_warning,
-        }
+        return await loop.run_in_executor(None, lambda: _sync_pull_impl(full=full))
     except Exception as e:
         raise HTTPException(500, str(e))
 
 
 @app.post("/api/sync/push")
-async def sync_push():
+async def sync_push(background: bool = False):
     """Score all entries and push scores + recipe to Seismo."""
     import asyncio
-    import httpx as _httpx
-
-    model_info = db.get_active_model()
-    if not model_info:
-        raise HTTPException(400, "No trained model. Train first.")
-
-    all_entries = db.get_all_entries()
-    if not all_entries:
-        raise HTTPException(400, "No entries to score.")
-
-    # Compute any missing embeddings before scoring (push is explicit, user expects wait)
-    cfg = get_config()
-    if cfg.get("model_architecture") == "transformer":
-        missing = db.get_entries_without_embeddings(limit=5000)
-        if missing:
-            try:
-                loop = asyncio.get_event_loop()
-                await loop.run_in_executor(None, sync._compute_pending_embeddings)
-            except Exception as e:
-                logger.warning("Embedding computation failed before push: %s", e)
-
-    try:
-        scores = pipeline.score_entries(all_entries)
-    except Exception as e:
-        raise HTTPException(500, "Scoring failed: {}".format(e))
-
-    if not scores:
-        emb_count = db.get_embedding_count()
-        entry_count = db.get_entry_count()
-        raise HTTPException(
-            400,
-            "No scores produced. Embeddings: {}/{} entries. ".format(emb_count, entry_count)
-            + "Try syncing again to compute embeddings, then retrain."
+    if background:
+        job_id = _create_job("sync_push")
+        t = threading.Thread(
+            target=lambda: _run_job(job_id, lambda cb: _sync_push_impl(progress_cb=cb)),
+            daemon=True,
         )
-
-    score_by_key = {
-        (s["entry_type"], s["entry_id"]): s for s in scores
-    }
-    for entry in all_entries:
-        key = (entry["entry_type"], entry["entry_id"])
-        score = score_by_key.get(key)
-        if not score:
-            continue
-        try:
-            exp = explainer.explain_entry(entry)
-            if exp:
-                score["explanation"] = {
-                    "top_features": exp["top_features"],
-                    "confidence": exp["confidence"],
-                    "prediction": exp["prediction"],
-                }
-        except Exception:
-            pass
-
-    profile = model_manager.get_profile()
-    model_meta = None
-    if profile:
-        model_meta = {
-            "model_name": profile.get("model_name", ""),
-            "model_uuid": profile.get("model_uuid", ""),
-            "model_description": profile.get("description", ""),
-            "model_version": model_info["version"],
-            "model_trained_at": model_info.get("trained_at", ""),
-            "accuracy": model_info.get("accuracy", 0.0),
-            "f1_score": model_info.get("f1_score", 0.0),
-            "label_count": model_info.get("label_count", 0),
-            "architecture": model_info.get("architecture", "tfidf"),
-        }
+        t.start()
+        return {"success": True, "job_id": job_id}
 
     try:
-        score_result = sync.push_scores(scores, model_info["version"], model_meta=model_meta)
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, _sync_push_impl)
     except Exception as e:
-        detail = str(e)
-        if isinstance(e, _httpx.HTTPStatusError):
-            detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
-        raise HTTPException(500, "Failed to push scores: {}".format(detail))
+        raise HTTPException(500, str(e))
 
-    try:
-        sync.push_labels()
-    except Exception as e:
-        logger.warning("Label push failed during score push: %s", e)
-        db.log_sync("push", 0, "FAILED label push: {}".format(e))
 
-    try:
-        recipe = distiller.distill_recipe()
-    except Exception as e:
-        logger.warning("Recipe distillation failed: %s", e)
-        recipe = None
-
-    recipe_result = {}
-    if recipe:
-        try:
-            recipe_result = sync.push_recipe(recipe)
-        except Exception as e:
-            detail = str(e)
-            if isinstance(e, _httpx.HTTPStatusError):
-                detail = "Seismo HTTP {}: {}".format(e.response.status_code, e.response.text[:300])
-            recipe_result = {"error": detail}
-
-    return {
-        "success": True,
-        "scores_pushed": len(scores),
-        "score_result": score_result,
-        "recipe_result": recipe_result,
-    }
+@app.get("/api/jobs/{job_id}")
+async def job_status(job_id: str):
+    """Get background job status for sync/push progress polling."""
+    job = _get_job(job_id)
+    if not job:
+        raise HTTPException(404, "Job not found")
+    return job
 
 
 @app.post("/api/sync/labels")

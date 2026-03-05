@@ -103,6 +103,43 @@
     {% endif %}
 </div>
 
+<!-- Learned Legal Patterns -->
+<div class="dashboard-section">
+    <h2>Learned Legal Patterns</h2>
+    {% if legal_patterns and (legal_patterns.positive or legal_patterns.negative) %}
+        <div class="legal-patterns-grid">
+            <div class="legal-pattern-column">
+                <h3>Swiss-Impact Signals</h3>
+                <div class="legal-pattern-list">
+                    {% for phrase, weight in legal_patterns.positive %}
+                        <div class="legal-pattern-item legal-pattern-positive">
+                            <span class="legal-pattern-text">{{ phrase }}</span>
+                            <span class="legal-pattern-weight">+{{ "%.3f" | format(weight) }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="legal-pattern-column">
+                <h3>Procedural / Noise Signals</h3>
+                <div class="legal-pattern-list">
+                    {% for phrase, weight in legal_patterns.negative %}
+                        <div class="legal-pattern-item legal-pattern-negative">
+                            <span class="legal-pattern-text">{{ phrase }}</span>
+                            <span class="legal-pattern-weight">+{{ "%.3f" | format(weight) }}</span>
+                        </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+        <p style="margin-top: 10px; font-size: 12px; color: #666;">
+            These are phrase-level patterns from the active recipe. They are used by Seismo's keyword scorer and
+            are especially important for legal text where single words are often too generic.
+        </p>
+    {% else %}
+        <div class="empty-state"><p>Train and push a model to see learned legal phrase patterns.</p></div>
+    {% endif %}
+</div>
+
 <!-- Training History -->
 <div class="dashboard-section">
     <h2>Training History</h2>

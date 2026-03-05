@@ -31,7 +31,8 @@ def _recipe_predict(entry: dict, recipe: dict) -> Optional[str]:
     text = f"{entry.get('title', '')} {entry.get('description', '')} {entry.get('content', '')}".lower()
     tokens = text.split()
     bigrams = [f"{tokens[i]} {tokens[i+1]}" for i in range(len(tokens) - 1)]
-    all_tokens = tokens + bigrams
+    trigrams = [f"{tokens[i]} {tokens[i+1]} {tokens[i+2]}" for i in range(len(tokens) - 2)]
+    all_tokens = tokens + bigrams + trigrams
 
     class_scores = {c: 0.0 for c in classes}
     for token in all_tokens:

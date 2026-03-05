@@ -32,6 +32,56 @@ from pipeline import (
 
 logger = logging.getLogger(__name__)
 
+LEGAL_TEMPLATE_PHRASES = {
+    # Cross-border market access / third-country signals
+    "third country": {"investigation_lead": 0.45, "important": 0.25},
+    "third countries": {"investigation_lead": 0.45, "important": 0.25},
+    "pays tiers": {"investigation_lead": 0.45, "important": 0.25},
+    "drittstaaten": {"investigation_lead": 0.45, "important": 0.25},
+    "member states only": {"investigation_lead": 0.55, "important": 0.2},
+    "eu eea": {"investigation_lead": 0.45, "important": 0.2},
+    "eu ewr": {"investigation_lead": 0.45, "important": 0.2},
+    "market access": {"investigation_lead": 0.35, "important": 0.25},
+    "single market": {"important": 0.25, "background": 0.12},
+    "internal market": {"important": 0.22, "background": 0.1},
+    "equivalence decision": {"investigation_lead": 0.35, "important": 0.2},
+    # Compliance and technical barriers
+    "conformity assessment": {"important": 0.35, "investigation_lead": 0.18},
+    "ce marking": {"important": 0.25, "background": 0.1},
+    "technical regulation": {"important": 0.22, "background": 0.12},
+    "compliance requirement": {"important": 0.28, "background": 0.1},
+    # Frequent procedural boilerplate (negative relevance signal)
+    "implementing act": {"noise": 0.35, "background": 0.12},
+    "delegated regulation": {"noise": 0.28, "background": 0.12},
+    "corrigendum": {"noise": 0.3},
+    "annex amendment": {"noise": 0.3},
+    "administrative procedure": {"noise": 0.3, "background": 0.15},
+}
+
+
+def _tokenize_text(text: str) -> list:
+    """Tokenize text into lowercase word tokens with unicode support."""
+    return re.findall(r"\b[a-zA-Z0-9\u00C0-\u024F]{2,}\b", (text or "").lower())
+
+
+def _compose_ngrams(tokens: list, max_n: int = 3) -> list:
+    """Create n-gram phrases (2..max_n) from tokens."""
+    grams = []
+    if not tokens:
+        return grams
+    for n in range(2, max_n + 1):
+        if len(tokens) < n:
+            break
+        for i in range(len(tokens) - n + 1):
+            grams.append(" ".join(tokens[i:i + n]))
+    return grams
+
+
+def _extract_recipe_tokens(text: str) -> list:
+    """Extract unigram, bigram, and trigram candidates for recipe matching."""
+    tokens = _tokenize_text(text)
+    return tokens + _compose_ngrams(tokens, max_n=3)
+
 
 def distill_recipe(top_n: Optional[int] = None):
     """
@@ -83,6 +133,8 @@ def distill_recipe(top_n: Optional[int] = None):
 
     # Boost keywords from user reasoning annotations
     keywords = _boost_from_reasoning(keywords)
+    # Add stable legal template phrases as prior signals for legislative text
+    keywords = _boost_legal_templates(keywords)
 
     # Normalize weights so accumulated scores stay in a reasonable range for
     # softmax regardless of text length — prevents long entries from getting
@@ -146,10 +198,7 @@ def _normalize_weights(keywords: dict, source_weights: dict) -> tuple:
             entry.get("description", ""),
             entry.get("content", ""),
         ).lower()
-        tokens = text.split()
-        bigrams = ["{} {}".format(tokens[j], tokens[j + 1])
-                   for j in range(len(tokens) - 1)]
-        all_tokens = tokens + bigrams
+        all_tokens = _extract_recipe_tokens(text)
 
         class_scores = {c: 0.0 for c in classes}
         for token in all_tokens:
@@ -259,20 +308,35 @@ def _boost_from_reasoning(keywords: dict) -> dict:
         if not reasoning or not label:
             continue
 
-        # Tokenize reasoning into words (simple split, lowercase)
-        tokens = re.findall(r'\b[a-zA-Z\u00C0-\u024F]{3,}\b', reasoning.lower())
-
-        for token in tokens:
+        tokens = _tokenize_text(reasoning)
+        phrases = _compose_ngrams(tokens, max_n=3)
+        # Unigrams + phrase patterns from the reasoning itself
+        for token in tokens + phrases:
+            if " " not in token and len(token) < 3:
+                continue
+            phrase_boost = BOOST_FACTOR
+            if " " in token:
+                phrase_boost = 1.8
             if token in keywords:
-                # Boost existing keyword's weight for this class
                 if label in keywords[token]:
-                    keywords[token][label] = round(
-                        keywords[token][label] * BOOST_FACTOR, 4
-                    )
+                    keywords[token][label] = round(keywords[token][label] * phrase_boost, 4)
+                else:
+                    keywords[token][label] = round(0.08 * phrase_boost, 4)
             else:
-                # Add as new keyword with a moderate base weight
-                keywords[token] = {label: 0.1}
+                base = 0.1 if " " not in token else 0.16
+                keywords[token] = {label: round(base, 4)}
 
+    return keywords
+
+
+def _boost_legal_templates(keywords: dict) -> dict:
+    """Inject legal phrase priors to improve Seismo-side recipe approximation."""
+    for phrase, cls_wts in LEGAL_TEMPLATE_PHRASES.items():
+        if phrase not in keywords:
+            keywords[phrase] = {}
+        for cls, wt in cls_wts.items():
+            prev = float(keywords[phrase].get(cls, 0.0))
+            keywords[phrase][cls] = round(prev + float(wt), 4)
     return keywords
 
 
@@ -314,9 +378,7 @@ def evaluate_recipe_quality(recipe: dict, sample_size: int = 100) -> float:
             entry.get("description", ""),
             entry.get("content", ""),
         ).lower()
-        tokens = text.split()
-        bigrams = ["{} {}".format(tokens[j], tokens[j + 1]) for j in range(len(tokens) - 1)]
-        all_tokens = tokens + bigrams
+        all_tokens = _extract_recipe_tokens(text)
 
         class_scores = {c: 0.0 for c in classes}
         for token in all_tokens:

@@ -181,6 +181,35 @@ body {
     flex-wrap: wrap;
 }
 
+.task-progress {
+    margin-top: 10px;
+}
+
+.task-progress-label {
+    font-size: 12px;
+    font-weight: 700;
+    margin-bottom: 4px;
+}
+
+.task-progress-track {
+    height: 8px;
+    background: #e0e0e0;
+    border: 2px solid #000000;
+    overflow: hidden;
+}
+
+.task-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: #FF6B6B;
+    transition: width 0.3s ease;
+}
+
+.task-progress-meta {
+    font-size: 12px;
+    margin-top: 4px;
+}
+
 /* ═══ Source Filter ═══ */
 .source-filter {
     display: flex;
@@ -572,6 +601,46 @@ body {
 
 .kw-positive { color: #000000; background: #e6ffe6; }
 .kw-negative { color: #000000; background: #ffe6e6; }
+
+/* Learned legal phrase patterns */
+.legal-patterns-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+}
+
+.legal-pattern-column h3 {
+    font-size: 14px;
+    margin-bottom: 8px;
+}
+
+.legal-pattern-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.legal-pattern-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border: 2px solid #000000;
+    padding: 6px 8px;
+    gap: 8px;
+}
+
+.legal-pattern-positive { background: #e6ffe6; }
+.legal-pattern-negative { background: #ffe6e6; }
+
+.legal-pattern-text {
+    font-family: monospace;
+    font-size: 12px;
+}
+
+.legal-pattern-weight {
+    font-size: 12px;
+    font-weight: 700;
+}
 
 /* History Table */
 .history-table {
