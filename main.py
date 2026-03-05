@@ -126,21 +126,41 @@ def _sync_pull_impl(full: bool, progress_cb=None) -> dict:
             limit = max(1000, expected + 250)
             if progress_cb:
                 progress_cb(10 + idx * 20, "Pulling {} entries...".format(entry_type))
-            fetched = sync.pull_entries(entry_type=entry_type, limit=limit)
+            # In full mode, pull all entry types first. Embeddings are handled in
+            # explicit rounds below so progress can be reported consistently.
+            fetched = sync.pull_entries(
+                entry_type=entry_type,
+                limit=limit,
+                compute_embeddings=False,
+            )
             entries_by_type[entry_type] = fetched
             count += fetched
 
         if get_config().get("model_architecture") == "transformer":
             # Keep running embedding pass until no missing entries remain.
+            prev_missing = None
+            stalled_rounds = 0
             while db.get_entries_without_embeddings(limit=1):
+                missing_now = len(db.get_entries_without_embeddings(limit=5000))
                 if progress_cb:
-                    missing_now = len(db.get_entries_without_embeddings(limit=5000))
                     progress_cb(
                         min(90, 70 + embedding_rounds * 4),
                         "Computing embeddings ({} missing)...".format(missing_now)
                     )
                 sync._compute_pending_embeddings()
                 embedding_rounds += 1
+                missing_after = len(db.get_entries_without_embeddings(limit=5000))
+                if prev_missing is not None and missing_after >= prev_missing:
+                    stalled_rounds += 1
+                else:
+                    stalled_rounds = 0
+                prev_missing = missing_after
+                if stalled_rounds >= 2:
+                    logger.warning(
+                        "Full sync embedding rounds stalled at %d missing entries; stopping early.",
+                        missing_after,
+                    )
+                    break
                 if embedding_rounds >= 25:
                     break
     else:

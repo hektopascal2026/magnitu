@@ -23,7 +23,12 @@ def _request(method: str, params: dict, **kwargs) -> httpx.Response:
         return resp
 
 
-def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -> int:
+def pull_entries(
+    since: str = None,
+    entry_type: str = "all",
+    limit: int = 500,
+    compute_embeddings: bool = True,
+) -> int:
     """
     Fetch entries from Seismo and store locally.
     In transformer mode, also computes embeddings for new entries.
@@ -42,7 +47,7 @@ def pull_entries(since: str = None, entry_type: str = "all", limit: int = 500) -
 
     # Compute embeddings for entries that don't have them yet
     cfg = get_config()
-    if cfg.get("model_architecture") == "transformer":
+    if compute_embeddings and cfg.get("model_architecture") == "transformer":
         _compute_pending_embeddings()
 
     return len(entries)

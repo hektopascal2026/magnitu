@@ -47,7 +47,8 @@
             <div class="about-step-number">1</div>
             <div class="about-step-body">
                 <h3>Sync</h3>
-                <p>Pull new entries from Seismo (the feed aggregator that collects articles, emails, and legal notices). {% if architecture == 'transformer' %}During sync, each entry is also processed through a language model that converts its text into a numerical "fingerprint" — a compact representation of what the article is about. This happens in the background so everything else stays fast.{% else %}New entries land in your local queue, ready for you to review.{% endif %}</p>
+                <p>Pull new entries from Seismo (the feed aggregator that collects articles, emails, and legal notices). You can run <strong>Sync</strong> for quick incremental updates or <strong>Full Sync</strong> for source-by-source backfill and embedding completion when coverage drifted. {% if architecture == 'transformer' %}During sync, each entry is also processed through a language model that converts its text into a numerical "fingerprint" — a compact representation of what the article is about.{% else %}New entries land in your local queue, ready for you to review.{% endif %}</p>
+                <p>Sync and Push run as background jobs with a live progress bar (phase + percent), so long runs are visible instead of looking stuck.</p>
             </div>
         </div>
         <div class="about-step">
@@ -129,11 +130,11 @@
         <div class="about-detail-grid">
             <div class="about-detail">
                 <span class="about-detail-label">How it works</span>
-                <span class="about-detail-value">After training, keywords are extracted from the model. Magnitu then scans your reasoning notes for matching words. Keywords that appear in your reasoning get a 1.5&times; weight boost for the class you labeled. New words from your reasoning are added to the recipe with a small base weight.</span>
+                <span class="about-detail-value">After training, weighted terms are extracted from the model (single words, bigrams, trigrams). Magnitu then scans your reasoning notes for matching words and phrases. Matches are boosted for the class you labeled; new terms from reasoning can be added with a base weight.</span>
             </div>
             <div class="about-detail">
                 <span class="about-detail-label">Practical effect</span>
-                <span class="about-detail-value">Terms like "public contracts" or "shell company" get boosted for investigation_lead in the recipe. This makes Seismo's live scoring more sensitive to the specific patterns you care about — even between full retrains.</span>
+                <span class="about-detail-value">Terms like "public contracts", "third country", or "conformity assessment" get boosted for the relevant class in the recipe. This makes Seismo's live scoring more sensitive to the specific patterns you care about — even between full retrains.</span>
             </div>
             <div class="about-detail">
                 <span class="about-detail-label">What it doesn't change</span>
@@ -206,7 +207,7 @@
     <div class="about-section">
         <h3>Training: From Understanding to Judgment</h3>
         <p>Every time you hit Train, Magnitu builds a brand-new classifier from scratch using all your labels. Nothing is carried over from the previous version — the model is rebuilt from the ground up so it always reflects your latest judgments.</p>
-        <p>The classifier itself is a Logistic Regression — a well-understood statistical method that learns to draw boundaries between the four label categories. It's fast to train (seconds, not hours) and works well even with a few hundred labels.</p>
+        <p>{% if architecture == 'transformer' %}The classifier head is an MLP (multi-layer perceptron) trained on cached transformer embeddings. For Seismo recipe export, Magnitu also trains a lighter TF-IDF student to distill the transformer's decisions into weighted text features.{% else %}The classifier is Logistic Regression trained on TF-IDF text features and source features.{% endif %}</p>
     </div>
 </div>
 
@@ -216,8 +217,9 @@
     <p class="section-desc">Magnitu's model runs on your machine in Python. But Seismo (the feed aggregator where you actually read entries) runs PHP on a web server. It can't run the model directly. This is where the recipe comes in.</p>
 
     <div class="about-section">
-        <p>After training, Magnitu translates the model's knowledge into a lightweight <strong>recipe</strong> — a list of keywords with weights for each class. For example, the word "investigation" might have a high weight for the investigation_lead class, while "press release" has a high weight for noise.</p>
+        <p>After training, Magnitu translates the model's knowledge into a lightweight <strong>recipe</strong> — a list of weighted text features for each class (single words plus phrase patterns). For example, "investigation" might push toward investigation_lead, while procedural phrases can push toward noise.</p>
         <p>This recipe is pushed to Seismo in JSON format. Seismo's PHP engine then uses it to score new entries in real time — matching words from each article against the recipe's keywords and computing a score. It's a simplified approximation of the full model, but it runs in milliseconds without needing Python.</p>
+        <p>The exported recipe now keeps both strong <strong>positive</strong> and strong <strong>negative</strong> signals per class. This acts as both accelerator and brake in Seismo scoring, reducing common false positives.</p>
 
         {% if architecture == 'transformer' %}
         <div class="about-section">
@@ -359,8 +361,8 @@
     </div>
 
     <div class="about-section">
-        <h3>Focused Labeling in Magnitu Mini</h3>
-        <p>Magnitu Mini has a <strong>source filter</strong> (All / Legislation / News) in the top bar. Switch to "Legislation" to label only Lex items. This lets you efficiently build up the training data the model needs — without wading through RSS articles in between.</p>
+        <h3>Focused Labeling for Legislation</h3>
+        <p>Magnitu Mini and the main Label page both have a <strong>source filter</strong> (All / Legislation / News). Switch to "Legislation" to label only Lex items. This lets you efficiently build up the training data the model needs — without wading through RSS articles in between.</p>
         <p>A target of 50–100 labeled legislation items (with reasoning notes on the important ones) is enough for the model to start distinguishing Swiss-relevant legislation from EU-internal housekeeping. The existing four labels map directly:</p>
         <div class="about-detail-grid">
             <div class="about-detail">
@@ -380,6 +382,11 @@
                 <span class="about-detail-value">EU-internal procedure, unrelated sector, or administrative routine with no Swiss angle.</span>
             </div>
         </div>
+    </div>
+
+    <div class="about-section">
+        <h3>Dashboard Phrase Signals</h3>
+        <p>The Dashboard now shows a <strong>Learned Legal Patterns</strong> panel with positive Swiss-impact signals and procedural/noise signals from the active recipe. Use it as a quick sanity check after training and push: if the patterns look off, label a few counterexamples and retrain.</p>
     </div>
 </div>
 
@@ -650,7 +657,7 @@
             <strong>Check the Dashboard.</strong> Watch accuracy and F1 score climb across model versions. If a class has very few labels, focus your next session on it.
         </div>
         <div class="about-tip">
-            <strong>Use the Legislation filter.</strong> In Magnitu Mini, switch to "Legislation" to label only Lex items. Write reasoning notes explaining the Swiss angle — the model can't see it in the legal text alone.
+            <strong>Use the Legislation filter.</strong> In Magnitu Mini or on the main Label page, switch to "Legislation" to label only Lex items. Write reasoning notes explaining the Swiss angle — the model can't see it in the legal text alone.
         </div>
     </div>
 </div>
