@@ -32,6 +32,23 @@ from pipeline import (
 
 logger = logging.getLogger(__name__)
 
+LOW_SIGNAL_STOPWORDS = {
+    # German
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "einem",
+    "einen", "und", "oder", "aber", "in", "im", "am", "an", "auf", "aus", "von",
+    "mit", "ohne", "zu", "zum", "zur", "für", "ist", "sind", "war", "waren", "wird",
+    "werden", "nach", "bei", "als", "auch", "wie", "was", "wo", "wenn", "dass",
+    # English
+    "the", "a", "an", "and", "or", "but", "to", "of", "in", "on", "at", "for", "with",
+    "by", "from", "is", "are", "was", "were", "be", "been", "being", "that", "this",
+    # French
+    "le", "la", "les", "de", "des", "du", "un", "une", "et", "ou", "dans", "sur", "pour",
+    "avec", "sans", "est", "sont", "été", "ce", "cette", "ces",
+    # Italian
+    "il", "lo", "gli", "i", "l", "di", "del", "della", "dei", "delle", "un", "una",
+    "e", "o", "in", "su", "per", "con", "senza", "è", "sono", "era", "che",
+}
+
 LEGAL_TEMPLATE_PHRASES = {
     # Cross-border market access / third-country signals
     "third country": {"investigation_lead": 0.45, "important": 0.25},
@@ -81,6 +98,19 @@ def _extract_recipe_tokens(text: str) -> list:
     """Extract unigram, bigram, and trigram candidates for recipe matching."""
     tokens = _tokenize_text(text)
     return tokens + _compose_ngrams(tokens, max_n=3)
+
+
+def _is_low_signal_unigram(token: str) -> bool:
+    """Return True for unigrams that are too generic to export."""
+    if " " in token:
+        return False
+    if len(token) < 3:
+        return True
+    return token in LOW_SIGNAL_STOPWORDS
+
+
+def _clip(value: float, max_abs: float) -> float:
+    return max(-max_abs, min(max_abs, value))
 
 
 def _select_signed_features(pairs: list, top_n: int) -> list:
@@ -158,6 +188,8 @@ def distill_recipe(top_n: Optional[int] = None):
                     source_weights[source_name] = {}
                 source_weights[source_name][cls] = round(float(weight), 4)
             else:
+                if _is_low_signal_unigram(feature):
+                    continue
                 if feature not in keywords:
                     keywords[feature] = {}
                 keywords[feature][cls] = round(float(weight), 4)
@@ -171,6 +203,9 @@ def distill_recipe(top_n: Optional[int] = None):
     # softmax regardless of text length — prevents long entries from getting
     # extreme scores while short entries cluster near 0.5
     keywords, source_weights = _normalize_weights(keywords, source_weights)
+
+    # Stabilize export so repeated tokens and source priors cannot dominate.
+    keywords, source_weights = _stabilize_export_weights(keywords, source_weights)
 
     # Build recipe
     recipe = {
@@ -280,6 +315,45 @@ def _normalize_weights(keywords: dict, source_weights: dict) -> tuple:
         }
 
     return normalized_kw, normalized_sw
+
+
+def _stabilize_export_weights(keywords: dict, source_weights: dict) -> tuple:
+    """
+    Clamp exported weights to keep Seismo recipe scoring stable:
+    - lower cap for unigrams (repeat more often in text)
+    - slightly higher cap for phrase patterns
+    - strict cap for source priors so text remains dominant
+    """
+    cfg = get_config()
+    max_unigram_abs = float(cfg.get("recipe_max_unigram_abs", 0.12))
+    max_phrase_abs = float(cfg.get("recipe_max_phrase_abs", 0.24))
+    max_source_abs = float(cfg.get("recipe_max_source_abs", 0.08))
+    min_abs_keep = float(cfg.get("recipe_min_abs_keep", 0.01))
+
+    stable_kw = {}
+    for token, cls_wts in keywords.items():
+        if _is_low_signal_unigram(token):
+            continue
+        cap = max_phrase_abs if " " in token else max_unigram_abs
+        clipped = {}
+        for cls, wt in cls_wts.items():
+            w = round(_clip(float(wt), cap), 4)
+            if abs(w) >= min_abs_keep:
+                clipped[cls] = w
+        if clipped:
+            stable_kw[token] = clipped
+
+    stable_sw = {}
+    for src, cls_wts in source_weights.items():
+        clipped = {}
+        for cls, wt in cls_wts.items():
+            w = round(_clip(float(wt), max_source_abs), 4)
+            if abs(w) >= min_abs_keep:
+                clipped[cls] = w
+        if clipped:
+            stable_sw[src] = clipped
+
+    return stable_kw, stable_sw
 
 
 def _distill_from_transformer(top_n: int) -> dict:
