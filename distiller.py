@@ -83,6 +83,36 @@ def _extract_recipe_tokens(text: str) -> list:
     return tokens + _compose_ngrams(tokens, max_n=3)
 
 
+def _select_signed_features(pairs: list, top_n: int) -> list:
+    """
+    Select a balanced set of positive and negative features.
+
+    This ensures recipe export contains both "raise score" and "lower score"
+    evidence per class (important for filtering domains like sports/noise).
+    """
+    if top_n <= 0:
+        return []
+
+    positives = [(f, w) for f, w in pairs if w > 0]
+    negatives = [(f, w) for f, w in pairs if w < 0]
+
+    positives.sort(key=lambda x: x[1], reverse=True)   # strongest positive first
+    negatives.sort(key=lambda x: x[1])                 # most negative first
+
+    pos_budget = top_n // 2
+    neg_budget = top_n - pos_budget
+
+    selected = positives[:pos_budget] + negatives[:neg_budget]
+
+    if len(selected) < top_n:
+        selected_keys = {f for f, _ in selected}
+        remainder = [(f, w) for f, w in pairs if f not in selected_keys]
+        remainder.sort(key=lambda x: abs(x[1]), reverse=True)
+        selected.extend(remainder[: max(0, top_n - len(selected))])
+
+    return selected[:top_n]
+
+
 def distill_recipe(top_n: Optional[int] = None):
     """
     Extract top keywords per class from the active model and package them as
@@ -117,7 +147,8 @@ def distill_recipe(top_n: Optional[int] = None):
     source_weights = {}
 
     for cls, pairs in importance.items():
-        for feature, weight in pairs[:top_n]:
+        signed_pairs = _select_signed_features(pairs, top_n)
+        for feature, weight in signed_pairs:
             if abs(weight) < 0.01:
                 continue
 
