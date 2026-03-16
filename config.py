@@ -10,9 +10,12 @@ VERSION = "2.0.0"
 
 BASE_DIR = Path(__file__).parent
 
-CONFIG_PATH = BASE_DIR / "magnitu_config.json"
-DB_PATH = BASE_DIR / "magnitu.db"
-MODELS_DIR = BASE_DIR / "models"
+DATA_DIR = Path(os.getenv("MAGNITU_DATA_DIR", str(BASE_DIR)))
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+CONFIG_PATH = DATA_DIR / "magnitu_config.json"
+DB_PATH = DATA_DIR / "magnitu.db"
+MODELS_DIR = DATA_DIR / "models"
 MODELS_DIR.mkdir(exist_ok=True)
 
 # Defaults
@@ -27,7 +30,7 @@ DEFAULTS = {
     "model_architecture": "transformer",     # "tfidf" or "transformer"
     "transformer_model_name": "xlm-roberta-base",
     "embedding_dim": 768,
-    "use_gpu": False,  # Use Apple Silicon GPU (MPS) for embeddings when available
+    "use_gpu": False,  # Use CUDA/MPS when available
 }
 
 

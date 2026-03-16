@@ -52,6 +52,42 @@ bash install/bootstrap.sh
 
 Open: `http://127.0.0.1:8000`
 
+## Run with Docker
+
+Magnitu ships with CPU and NVIDIA GPU container variants.
+
+### 1) Build and run (CPU, works on Linux + Apple Silicon)
+
+```bash
+docker compose up --build
+```
+
+Open: `http://127.0.0.1:8000`
+
+### 2) Build and run (NVIDIA GPU on Linux)
+
+Requires [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up --build
+```
+
+### Docker data persistence
+
+- App data is stored in the named volume `magnitu_data`:
+  - config: `/app/data/magnitu_config.json`
+  - database: `/app/data/magnitu.db`
+  - models: `/app/data/models`
+  - transformer cache: `/app/data/hf`
+- On first start, Magnitu auto-creates `/app/data/magnitu_config.json` from `magnitu_config.example.json`.
+- Set Seismo URL + API key in the UI (`Settings`) after the first boot.
+
+### Platform notes
+
+- **NVIDIA Linux**: enable `GPU acceleration` in Settings to use CUDA.
+- **Apple Silicon (M1/M2/M3)**: Docker Desktop Linux containers do not expose Metal/MPS, so Docker mode runs on CPU there.
+- If you want Apple GPU acceleration, run Magnitu natively on macOS (non-Docker).
+
 ## Notes
 
 - Seismo currently uses one active recipe at a time. Last push wins.

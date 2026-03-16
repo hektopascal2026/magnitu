@@ -7,5 +7,6 @@
   "alert_threshold": 0.75,
   "model_architecture": "transformer",
   "transformer_model_name": "xlm-roberta-base",
-  "embedding_dim": 768
+  "embedding_dim": 768,
+  "use_gpu": false
 }

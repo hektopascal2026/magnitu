@@ -892,7 +892,9 @@ async def stats():
     gpu_available = False
     try:
         import torch
-        gpu_available = hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        gpu_available = torch.cuda.is_available() or (
+            hasattr(torch.backends, "mps") and torch.backends.mps.is_available()
+        )
     except ImportError:
         pass
 

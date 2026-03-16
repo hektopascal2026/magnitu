@@ -61,6 +61,8 @@ def _select_device():
     config = get_config()
     use_gpu = config.get("use_gpu", True)
 
+    if use_gpu and torch.cuda.is_available():
+        return torch.device("cuda")
     if use_gpu and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
@@ -83,15 +85,17 @@ def _get_embedder():
 
     device = _select_device()
 
+    model_dtype = torch.float16 if device.type in ("cuda", "mps") else torch.float32
+
     model = AutoModel.from_pretrained(
         model_name,
-        dtype=torch.float16,
+        dtype=model_dtype,
         low_cpu_mem_usage=True,
     )
     model.eval()
     model.to(device)
 
-    logger.info("Transformer loaded on %s (float16)", device.type)
+    logger.info("Transformer loaded on %s (%s)", device.type, str(model_dtype).split(".")[-1])
 
     _embedder = {"tokenizer": tokenizer, "model": model, "device": device}
     return _embedder
@@ -102,13 +106,16 @@ def release_embedder():
     global _embedder
     if _embedder is not None:
         import gc
-        was_mps = _embedder["device"].type == "mps"
+        device_type = _embedder["device"].type
         del _embedder
         _embedder = None
         gc.collect()
-        if was_mps:
+        if device_type == "mps":
             import torch
             torch.mps.empty_cache()
+        elif device_type == "cuda":
+            import torch
+            torch.cuda.empty_cache()
         logger.info("Transformer model released from memory.")
 
 

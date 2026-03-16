@@ -42,7 +42,7 @@
                 <div class="form-group">
                     <label>Architecture</label>
                     <select id="modelArch" style="padding: 10px 14px; border: 2px solid #000000; font-size: 14px; font-family: inherit; background: #ffffff; color: #000000;">
-                        <option value="transformer" {% if config.model_architecture == 'transformer' %}selected{% endif %}>Transformer (DistilRoBERTa) — recommended</option>
+                        <option value="transformer" {% if config.model_architecture == 'transformer' %}selected{% endif %}>Transformer (XLM-RoBERTa) — recommended</option>
                         <option value="tfidf" {% if config.model_architecture == 'tfidf' %}selected{% endif %}>TF-IDF + LogReg (Magnitu 1 fallback)</option>
                     </select>
                     <div class="form-help">Transformer uses a pre-trained language model for better understanding. TF-IDF uses keyword counting (faster, simpler).</div>
@@ -56,9 +56,9 @@
                 <div class="form-group">
                     <label>
                         <input type="checkbox" id="useGpu" {% if config.get('use_gpu', true) %}checked{% endif %}>
-                        GPU acceleration (Apple Silicon)
+                        GPU acceleration (NVIDIA CUDA / Apple Silicon MPS)
                     </label>
-                    <div class="form-help">Use the Metal GPU on Apple Silicon Macs for faster embedding computation. Disable if you experience issues.</div>
+                    <div class="form-help">Use CUDA on Linux/NVIDIA or Metal (MPS) on Apple Silicon for faster embedding computation. Disable if you experience issues.</div>
                 </div>
             </div>
             <div class="form-actions">
